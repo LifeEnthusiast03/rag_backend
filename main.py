@@ -71,6 +71,7 @@ async def upload_pdfs(files: List[UploadFile] = File(...)):
             load_or_create_vector_store(batch_dir)
             print("here fassi index will be generated in future")
         except Exception as e:
+            print(e)
             return {
                 "message": f"Files uploaded but vector store update failed: {str(e)}",
                 "files": uploaded_files,
@@ -91,3 +92,6 @@ async def upload_pdfs(files: List[UploadFile] = File(...)):
 def pdfchat(req: ChatRequest):
     response = get_response(req)
     return {"response": response}
+@app.get("/health")
+def cheak_health():
+    return {"health":"okay"}
