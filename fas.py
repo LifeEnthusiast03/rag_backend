@@ -22,7 +22,7 @@ def load_or_create_vector_store(filepath:Path):
     
     # Load PDFs from the specified directory
     loader = PyPDFDirectoryLoader(str(batch_path))
-    text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=300)
+    text_splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=300)
     docs = loader.load()
      
     split_docs = text_splitter.split_documents(docs)
