@@ -8,6 +8,7 @@ from  fas import load_or_create_vector_store,get_vector_store
 from pymodel import ChatRequest
 from chatmodel import get_response
 from database import engine
+from config import init_db
 import data_models
 app = FastAPI()
 data_models.Base.metadata.create_all(bind=engine)
