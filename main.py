@@ -7,8 +7,11 @@ from datetime import datetime
 from  fas import load_or_create_vector_store,get_vector_store
 from pymodel import ChatRequest
 from chatmodel import get_response
+from database import engine
+import data_models
 app = FastAPI()
-
+data_models.Base.metadata.create_all(bind=engine)
+print("tables created")
 # Enable CORS for your React frontend
 app.add_middleware(
     CORSMiddleware,

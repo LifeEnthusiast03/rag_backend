@@ -10,3 +10,6 @@ langchain-text-splitters
 langchain-google-genai
 faiss-cpu
 pypdf
+sqlalchemy
+asyncpg
+psycopg2-binary
