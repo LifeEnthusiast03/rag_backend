@@ -1,4 +1,4 @@
-from database import sessionLocal
+from .database import sessionLocal
 
 def init_db():
     db = sessionLocal()

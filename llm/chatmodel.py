@@ -2,10 +2,9 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.runnables import RunnableParallel,RunnablePassthrough
 from langchain_core.prompts import PromptTemplate
 from langchain_core.output_parsers import StrOutputParser
-from pydantic import BaseModel
 from dotenv import load_dotenv
-from pymodel import ChatRequest
-from fas import get_vector_store
+from models.pymodel import ChatRequest
+from retriver.fas import get_vector_store
 load_dotenv()
 model = ChatGoogleGenerativeAI(
     model="gemini-3-flash-preview",
