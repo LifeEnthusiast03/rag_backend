@@ -4,7 +4,7 @@ from db.database import engine
 from db import data_models
 from route.chat_route.chat_router import router as chat_router
 from route.upload_route.upload_router import router as upload_router
-
+from route.auth_route.auth_router import router as auth_router
 app = FastAPI()
 
 
@@ -20,6 +20,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+#Added Auth route
+app.include_router(auth_router)
 
 # Added upload Router
 app.include_router(upload_router)

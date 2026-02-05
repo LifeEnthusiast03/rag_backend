@@ -13,3 +13,6 @@ pypdf
 sqlalchemy
 asyncpg
 psycopg2-binary
+pyJWT
+bcrypt
+email-validator
