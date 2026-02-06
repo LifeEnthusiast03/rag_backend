@@ -33,3 +33,7 @@ class login_user_response(BaseModel):
         user_name:str
         email:EmailStr
         token:str
+class userdataforapi(BaseModel):
+      user_id:int
+      user_name:str
+      email:EmailStr
