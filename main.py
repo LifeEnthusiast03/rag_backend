@@ -14,7 +14,6 @@ app = FastAPI()
 # Creating tables in postgrsql
 data_models.Base.metadata.create_all(bind=engine)
 print("tables created")
-
 # Enable CORS for your React frontend
 app.add_middleware(
     CORSMiddleware,
