@@ -37,3 +37,10 @@ class userdataforapi(BaseModel):
       user_id:int
       user_name:str
       email:EmailStr
+
+class chat(BaseModel):
+      chat_id:int
+      chat_name:int
+class message(BaseModel):
+      role:str
+      content:str

@@ -10,7 +10,7 @@ model = ChatGoogleGenerativeAI(
     model="gemini-3-flash-preview",
 )
 
-def get_response(req:ChatRequest):
+async def get_response(req:ChatRequest):
     vector_store = get_vector_store(req.chat_id)
     retriver = vector_store.as_retriever(search_kwargs={"k":10})
     print(f"success full geting the retriver")
@@ -30,6 +30,6 @@ def get_response(req:ChatRequest):
     parser=StrOutputParser()
     chain2=chain1 |prompt|model| parser|prompt2|model|parser
     print(f"start the api call")
-    response = chain2.invoke(req.question)
+    response = await chain2.ainvoke(req.question)
     print(response)
     return str(response)

@@ -12,8 +12,8 @@ app = FastAPI()
 
 
 # Creating tables in postgrsql
-data_models.Base.metadata.create_all(bind=engine)
-print("tables created")
+# data_models.Base.metadata.create_all(bind=engine)
+# print("tables created")
 # Enable CORS for your React frontend
 app.add_middleware(
     CORSMiddleware,
@@ -40,7 +40,7 @@ def cheak_health():
     return {"health":"okay"}
 
 @app.get("/protected")
-async def protected_route(user:Annotated[userdataforapi,Depends(get_current_user)]):
+def protected_route(user:Annotated[userdataforapi,Depends(get_current_user)]):
     return {
         "user": user
     }
