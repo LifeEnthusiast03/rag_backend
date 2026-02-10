@@ -7,13 +7,13 @@ from route.upload_route.upload_router import router as upload_router
 from route.auth_route.auth_router import router as auth_router
 from models.pymodel import userdataforapi
 from typing import Annotated
-from utils.routeprotect import get_current_user
+from utils.protectroute import get_current_user
 app = FastAPI()
 
 
 # Creating tables in postgrsql
-# data_models.Base.metadata.create_all(bind=engine)
-# print("tables created")
+data_models.Base.metadata.create_all(bind=engine)
+print("tables created")
 # Enable CORS for your React frontend
 app.add_middleware(
     CORSMiddleware,
@@ -25,7 +25,6 @@ app.add_middleware(
 
 #Added Auth route
 app.include_router(auth_router)
-
 # Added upload Router
 app.include_router(upload_router)
 #Adder chat router

@@ -27,6 +27,7 @@ async def get_current_user(
             user_name=user.user_name,
             email=user.email
         )
+        print("get user data succesfully")
         return userData
     except HTTPException as e:
         raise

@@ -10,8 +10,8 @@ model = ChatGoogleGenerativeAI(
     model="gemini-3-flash-preview",
 )
 
-async def get_response(req:ChatRequest):
-    vector_store = get_vector_store(req.chat_id)
+async def get_response(req:ChatRequest,chatfileloc:str):
+    vector_store = get_vector_store(chatfileloc)
     retriver = vector_store.as_retriever(search_kwargs={"k":10})
     print(f"success full geting the retriver")
     prompt = PromptTemplate.from_template(

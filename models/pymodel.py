@@ -6,7 +6,7 @@ class chat_his(BaseModel):
     role:str
     content:str
 class ChatRequest(BaseModel):
-    chat_id: str
+    chat_id: int
     question: str
     chat_history: List[chat_his]
 
@@ -40,7 +40,7 @@ class userdataforapi(BaseModel):
 
 class chat(BaseModel):
       chat_id:int
-      chat_name:int
+      chat_name:str
 class message(BaseModel):
       role:str
       content:str

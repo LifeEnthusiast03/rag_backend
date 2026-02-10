@@ -14,6 +14,7 @@ class Chat(Base):
     __tablename__="Chat"
     chat_id=Column(Integer,primary_key=True,index=True)
     chat_name=Column(String)
+    chat_fileloc=Column(String)
     user_id = Column(Integer,ForeignKey("Users.user_id"))
     user = relationship("Users",back_populates="chats")
     messages = relationship("Message",back_populates="chat")

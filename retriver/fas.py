@@ -5,7 +5,6 @@ from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from langchain_community.docstore.in_memory import InMemoryDocstore
 from langchain_community.vectorstores import FAISS
 from dotenv import load_dotenv
-import faiss
 from pathlib import Path
 import os
 
@@ -38,7 +37,7 @@ def load_or_create_vector_store(filepath:Path):
 
 def get_vector_store(batch_dir:str):
     # Construct full path with uploads directory
-    batch_path = Path("uploads") / batch_dir
+    batch_path = Path(batch_dir)
     persist_path = batch_path / "faiss_index"
     print(f"Looking for vector store at: {persist_path}")
     
