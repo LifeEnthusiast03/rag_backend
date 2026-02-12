@@ -1,17 +1,14 @@
 from langchain_community.document_loaders import PyPDFDirectoryLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_huggingface.embeddings import HuggingFaceEmbeddings
 from uuid import uuid4
-from langchain_google_genai import GoogleGenerativeAIEmbeddings
-from langchain_community.docstore.in_memory import InMemoryDocstore
 from langchain_community.vectorstores import FAISS
-from dotenv import load_dotenv
 from pathlib import Path
 import os
 
-load_dotenv()
 
-embeddings = GoogleGenerativeAIEmbeddings(model="models/gemini-embedding-001")
-
+# embeddings = GoogleGenerativeAIEmbeddings(model="models/gemini-embedding-001")
+embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-mpnet-base-v2")
 def load_or_create_vector_store(filepath:Path):
     
     batch_path = filepath
