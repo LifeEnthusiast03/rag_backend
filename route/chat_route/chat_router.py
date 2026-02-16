@@ -1,5 +1,5 @@
 from fastapi import APIRouter,Depends,HTTPException
-from models.pymodel import ChatRequest
+from models.pymodel import ChatRequest, ChatResponse, LLMResponseFormat
 from llm.chatmodel import get_response
 from typing import Annotated
 from models.pymodel import userdataforapi
@@ -8,11 +8,13 @@ from sqlalchemy.orm import Session
 from db.config import init_db
 from db.data_models import Chat,Message
 from models.pymodel import chat,message
+from datetime import datetime
 import os
 import shutil
+import json
 router = APIRouter()
 
-@router.post("/chat")
+@router.post("/chat", response_model=ChatResponse)
 async def pdfchat(req: ChatRequest,user:Annotated[userdataforapi,Depends(get_current_user)],db:Annotated[Session,Depends(init_db)]):
     try:
         cur_chat = db.query(Chat).filter(Chat.chat_id==req.chat_id, Chat.user_id==user.user_id).first()
@@ -26,23 +28,43 @@ async def pdfchat(req: ChatRequest,user:Annotated[userdataforapi,Depends(get_cur
         db.add(usermessage)
         db.commit()
         curchat_fileloc =cur_chat.chat_fileloc
-        response = await get_response(req,curchat_fileloc)
-        if not response:
-            raise Exception("failed to generate response")
+        
+        # Get structured response from LLM
+        llm_response: LLMResponseFormat = await get_response(req,curchat_fileloc)
+        if not llm_response:
+            raise Exception("Failed to generate response")
+        
+        # Store the main answer in database
         systemmessage = Message(
             chat_id = req.chat_id,
-            role="system",
-            content=response
+            role="assistant",
+            content=llm_response.answer  # Store the answer text
         ) 
         db.add(systemmessage)
         db.commit()
-        return {"response": response,
-                "Successful":True}
+        
+        # Return comprehensive response with all structured data
+        return ChatResponse(
+            success=True,
+            chat_id=req.chat_id,
+            response=json.dumps(llm_response.dict(), ensure_ascii=False, indent=2),  # Full structured response as JSON
+            role="assistant",
+            timestamp=datetime.now().isoformat(),
+            sources_used=len(llm_response.sources_cited) if llm_response.sources_cited else 0,
+            error_message=None
+        )
     except Exception as e:
         db.rollback()
         print(f"Chat error: {e}")
-        return {"response": str(e),
-                "Successful":False}
+        return ChatResponse(
+            success=False,
+            chat_id=req.chat_id,
+            response="",
+            role="assistant",
+            timestamp=datetime.now().isoformat(),
+            sources_used=None,
+            error_message=str(e)
+        )
 @router.get("/getchat")
 def getchat(user:Annotated[userdataforapi,Depends(get_current_user)],db:Annotated[Session,Depends(init_db)]):
      try:

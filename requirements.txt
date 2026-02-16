@@ -16,3 +16,6 @@ psycopg2-binary
 pyJWT
 bcrypt
 email-validator
+langchain-huggingface 
+sentence_transformers
+
