@@ -6,8 +6,8 @@ from db.config import init_db
 import httpx
 import os 
 
-CLIENT_ID = "Ov23liE9lY7D7lywrXcI"
-CLIENT_SECRET = "42de518cd9138a02cd2fc415465f67b00bc4862f"
+CLIENT_ID = os.getenv("CLIENT_ID")
+CLIENT_SECRET = os.getenv("CLIENT_SECRET")
 REDIRECT_URI = os.getenv("REDIRECT_URI", "http://localhost:8000/github/callback")
 
 router = APIRouter()
