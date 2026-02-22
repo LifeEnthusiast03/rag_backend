@@ -1,4 +1,6 @@
 from fastapi import APIRouter,Depends,HTTPException
+from utils.protectroute import get_current_user
+from models.pymodel import userdataforapi
 from typing import Annotated
 from sqlalchemy.orm import Session
 from db.config import init_db
@@ -104,3 +106,7 @@ def loginuser(userdata: login_user_request, db: Annotated[Session, Depends(init_
             status_code=500,
             detail=f"Internal server error: {str(e)}"
         )
+
+@router.get("/getuser")
+def getuserinfo(user:Annotated[userdataforapi,Depends(get_current_user)]):
+    return {"user":user}

@@ -18,4 +18,5 @@ bcrypt
 email-validator
 langchain-huggingface 
 sentence_transformers
+httpx
 

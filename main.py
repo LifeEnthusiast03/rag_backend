@@ -5,6 +5,7 @@ from db import data_models
 from route.chat_route.chat_router import router as chat_router
 from route.upload_route.upload_router import router as upload_router
 from route.auth_route.auth_router import router as auth_router
+from route.auth_route.auth_github_route import router as github_router
 from models.pymodel import userdataforapi
 from typing import Annotated
 from utils.protectroute import get_current_user
@@ -29,6 +30,7 @@ app.include_router(auth_router)
 app.include_router(upload_router)
 #Adder chat router
 app.include_router(chat_router)
+app.include_router(github_router)
 # Home route
 @app.get("/")
 def read_root():
