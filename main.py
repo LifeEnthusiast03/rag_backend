@@ -38,7 +38,7 @@ def read_root():
 def cheak_health():
     return {"health":"okay"}
 
-@app.get("/protected")
+@app.get("/getuserdata")
 def protected_route(user:Annotated[userdataforapi,Depends(get_current_user)]):
     return {
         "user": user
