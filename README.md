@@ -57,6 +57,10 @@ pip install -r requirements.txt
 # Create .env file with:
 # JWT_SECRET=your-secret-key
 # GOOGLE_API_KEY=your-google-api-key
+# Optional for GitHub OAuth:
+# CLIENT_ID=your-github-client-id
+# CLIENT_SECRET=your-github-client-secret
+# FRONTEND_URL=http://localhost:5173
 
 # 5. Start PostgreSQL and create database
 # psql -U postgres -c "CREATE DATABASE rag_database;"
@@ -71,11 +75,14 @@ uvicorn main:app --reload
 
 ### Core Functionality
 ✅ **Complete Authentication System**
-- User signup and login with email/password
+- **Traditional Auth**: User signup and login with email/password
+- **OAuth 2.0**: GitHub OAuth integration for social login
 - JWT token-based authentication (24-hour expiration)
-- Bcrypt password hashing with salt
+- Bcrypt password hashing with salt for traditional auth
 - Protected route middleware
 - User-specific data isolation
+- Automatic user creation/login from GitHub profile
+- Email retrieval from public or private GitHub accounts
 
 ✅ **Document Processing**
 - Multi-file PDF upload support
@@ -153,7 +160,8 @@ rag_backend/
 │   └── fas.py              # Dual FAISS vector store (document + chat history)
 ├── route/                   # API route handlers (modular routers)
 │   ├── auth_route/         # Authentication endpoints
-│   │   └── auth_router.py  # Signup and login routes
+│   │   ├── auth_router.py  # Signup and login routes (email/password)
+│   │   └── auth_github_route.py # GitHub OAuth login routes
 │   ├── chat_route/         # Chat endpoints
 │   │   └── chat_router.py  # Document Q&A and chat management routes
 │   └── upload_route/       # Upload endpoints
@@ -180,6 +188,7 @@ rag_backend/
 - **Python 3.13+** (This project uses Python 3.13)
 - **PostgreSQL database** (Version 12 or higher recommended)
 - **Google Generative AI API Key** (Required for embeddings and LLM)
+- **GitHub OAuth App** (Optional, for social login feature)
 - **Virtual environment** (Strongly recommended for dependency isolation)
 - **Git** (For cloning the repository)
 
@@ -222,10 +231,17 @@ rag_backend/
      
      # Google Generative AI API Key (Required)
      GOOGLE_API_KEY=your-google-api-key-here
+     
+     # GitHub OAuth (Optional - for social login)
+     CLIENT_ID=your-github-oauth-client-id
+     CLIENT_SECRET=your-github-oauth-client-secret
+     REDIRECT_URI=http://localhost:8000/github/callback
+     FRONTEND_URL=http://localhost:5173
      ```
    - **Important**: 
      - Generate a strong `JWT_SECRET` for production (minimum 32 characters)
      - Obtain `GOOGLE_API_KEY` from [Google AI Studio](https://makersuite.google.com/app/apikey)
+     - For GitHub OAuth, create an OAuth App at [GitHub Developer Settings](https://github.com/settings/developers)
      - Never commit the `.env` file to version control (already in `.gitignore`)
 
 6. **Initialize the database**
@@ -243,6 +259,10 @@ Create a `.env` file in the root directory with the following variables:
 | `JWT_SECRET` | Yes | None | Secret key for JWT token signing (min 32 chars) |
 | `JWT_ALGORITHM` | No | `HS256` | Algorithm for JWT encoding |
 | `GOOGLE_API_KEY` | Yes | None | Google Generative AI API key |
+| `CLIENT_ID` | No | None | GitHub OAuth App Client ID |
+| `CLIENT_SECRET` | No | None | GitHub OAuth App Client Secret |
+| `REDIRECT_URI` | No | `http://localhost:8000/github/callback` | GitHub OAuth callback URL |
+| `FRONTEND_URL` | No | `http://localhost:5173` | Frontend URL for OAuth redirects |
 | `DATABASE_URI` | No | See below | PostgreSQL connection string |
 
 **Example `.env` file:**
@@ -253,6 +273,12 @@ JWT_ALGORITHM=HS256
 
 # AI Model
 GOOGLE_API_KEY=AIzaSyC...your-actual-key-here
+
+# GitHub OAuth (Optional)
+CLIENT_ID=Ov23abc...your-github-client-id
+CLIENT_SECRET=your-github-client-secret
+REDIRECT_URI=http://localhost:8000/github/callback
+FRONTEND_URL=http://localhost:5173
 
 # Database (optional if using default)
 # DATABASE_URI=postgresql://postgres:password@localhost:5432/rag_database
@@ -312,7 +338,9 @@ The API will be available at:
 | GET | `/health` | No | Health check endpoint |
 | POST | `/signup` | No | User registration |
 | POST | `/login` | No | User authentication |
-| GET | `/protected` | Yes | Protected route example |
+| GET | `/githublogin` | No | Initiate GitHub OAuth flow |
+| GET | `/github/callback` | No | GitHub OAuth callback handler |
+| GET | `/getuserdata` | Yes | Get current user data |
 | POST | `/upload-pdfs` | Yes | Upload PDF files |
 | POST | `/chat` | Yes | Ask questions about documents |
 | GET | `/getchat` | Yes | Get all user chat sessions |
@@ -377,9 +405,87 @@ POST /login
 }
 ```
 
+#### 3. GitHub OAuth Login
+```http
+GET /githublogin
+```
+**Description**: Initiates GitHub OAuth authentication flow. Redirects user to GitHub for authorization.
+
+**Authentication**: Not required
+
+**Usage**: Direct browser to this endpoint
+```
+http://localhost:8000/githublogin
+```
+
+**Behavior**: 
+- Redirects to GitHub authorization page
+- User authorizes the application
+- GitHub redirects back to `/github/callback`
+
+**Note**: Cannot be tested from Swagger UI. Must open in browser.
+
+#### 4. GitHub OAuth Callback
+```http
+GET /github/callback?code={authorization_code}
+```
+**Description**: Handles GitHub OAuth callback. Exchanges authorization code for access token, retrieves user data, creates/finds user in database, and redirects to frontend with JWT token.
+
+**Authentication**: Not required (handled by OAuth flow)
+
+**Query Parameters**:
+- `code` (string, required): GitHub authorization code
+
+**Behavior**:
+1. Exchanges code for GitHub access token
+2. Fetches user profile from GitHub API
+3. Retrieves email (including from private emails if needed)
+4. Creates new user or finds existing user by email
+5. Generates JWT token for the user
+6. Redirects to frontend with token and user data
+
+**Redirect URL Format**:
+```
+{FRONTEND_URL}/auth/github/callback?token={jwt_token}&user_id={id}&user_name={name}&email={email}
+```
+
+**Example**:
+```
+http://localhost:5173/auth/github/callback?token=eyJhbG...&user_id=5&user_name=johndoe&email=john@example.com
+```
+
+**Error Responses**:
+- `500`: GitHub OAuth not configured (missing CLIENT_ID/SECRET)
+- `400`: Failed to get access token or user data
+- `400`: Unable to retrieve email from GitHub account
+
+#### 5. Get User Data
+```http
+GET /getuserdata
+```
+**Description**: Get authenticated user's data from JWT token.
+
+**Authentication**: Required (Bearer Token)
+
+**Headers**: 
+```
+Authorization: Bearer <your_jwt_token>
+```
+
+**Response**:
+```json
+{
+  "user": {
+    "user_id": 1,
+    "user_name": "John Doe",
+    "email": "john@example.com"
+  }
+}
+```
+
 ### Document Management Routes
 
-#### 3. Upload PDFs
+#### 6. Upload PDFs
 ```http
 POST /upload-pdfs
 ```
@@ -421,7 +527,7 @@ POST /upload-pdfs
 
 ### Chat Routes
 
-#### 4. Chat with Documents
+#### 7. Chat with Documents
 ```http
 POST /chat
 ```
@@ -475,7 +581,7 @@ POST /chat
 }
 ```
 
-#### 5. Get User Chats
+#### 8. Get User Chats
 ```http
 GET /getchat
 ```
@@ -500,7 +606,7 @@ GET /getchat
 }
 ```
 
-#### 6. Get Chat Conversation
+#### 9. Get Chat Conversation
 ```http
 GET /getchatconversation?chatid=1
 ```
@@ -537,7 +643,7 @@ GET /getchatconversation?chatid=1
 }
 ```
 
-#### 7. Delete Chat
+#### 10. Delete Chat
 ```http
 DELETE /deletechat?chatid=1
 ```
@@ -573,7 +679,7 @@ DELETE /deletechat?chatid=1
 
 ### Protected Routes
 
-#### 8. Protected Endpoint (Example)
+#### 11. Protected Endpoint (Example)
 ```http
 GET /protected
 ```
@@ -597,7 +703,7 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 
 ### System Routes
 
-#### 9. Root Endpoint
+#### 12. Root Endpoint
 ```http
 GET /
 ```
@@ -610,7 +716,7 @@ Returns API status message.
 }
 ```
 
-#### 10. Health Check
+#### 13. Health Check
 ```http
 GET /health
 ```
@@ -660,6 +766,7 @@ Returns service health status.
 - **Python Multipart** - File upload handling
 - **Python Dotenv** - Environment variable management
 - **CORS Middleware** - Cross-Origin Resource Sharing support
+- **httpx** - Async HTTP client for external API calls (GitHub OAuth)
 
 ## 📦 Key Dependencies
 
@@ -693,6 +800,7 @@ pip install -r requirements.txt
 - `python-dotenv` - Environment variables
 - `python-multipart` - File upload support
 - `email-validator` - Email validation
+- `httpx` - Async HTTP client for OAuth and external APIs
 
 ## 🗄️ Database Schema
 
@@ -700,8 +808,10 @@ pip install -r requirements.txt
 - `user_id` (Integer, Primary Key, Auto-increment)
 - `user_name` (String) - User's full name
 - `email` (String) - User's email address (unique)
-- `password` (String) - Bcrypt hashed password
+- `password` (String, Nullable) - Bcrypt hashed password (null for OAuth users)
 - **Relationships**: One-to-Many with Chat table
+
+**Note**: Users created via GitHub OAuth will have `password` set to null. Email serves as the unique identifier for both traditional and OAuth authentication.
 
 ### Chat Table
 - `chat_id` (Integer, Primary Key, Auto-increment)
@@ -886,6 +996,7 @@ pip install -r requirements.txt
 ### Implemented Security Features
 - ✅ **Password Hashing**: Passwords are hashed using bcrypt with salt before storage (never stored in plain text)
 - ✅ **JWT Authentication**: Secure token-based authentication with 24-hour expiration
+- ✅ **OAuth 2.0**: GitHub OAuth integration for secure social login
 - ✅ **Protected Routes**: Middleware validates JWT tokens on all protected endpoints
 - ✅ **User Authorization**: Chat ownership verification prevents unauthorized access to other users' chats
 - ✅ **Database Transactions**: Automatic rollback support on errors to maintain data integrity
@@ -893,6 +1004,41 @@ pip install -r requirements.txt
 - ✅ **Query Parameter Validation**: Pydantic models ensure proper data types and prevent injection attacks
 - ✅ **SQLAlchemy ORM**: Protection against SQL injection attacks
 - ✅ **Type Safety**: Pydantic models enforce type checking on all API requests/responses
+
+### GitHub OAuth Setup (Optional)
+
+To enable GitHub OAuth authentication:
+
+1. **Create GitHub OAuth App:**
+   - Go to [GitHub Developer Settings](https://github.com/settings/developers)
+   - Click "New OAuth App"
+   - Fill in application details:
+     - **Application name**: Your App Name
+     - **Homepage URL**: `http://localhost:8000` (or your production URL)
+     - **Authorization callback URL**: `http://localhost:8000/github/callback`
+   - Click "Register application"
+   - Copy the **Client ID**
+   - Generate a **Client Secret** and copy it
+
+2. **Configure Environment Variables:**
+   Add to your `.env` file:
+   ```env
+   CLIENT_ID=your_github_client_id_here
+   CLIENT_SECRET=your_github_client_secret_here
+   REDIRECT_URI=http://localhost:8000/github/callback
+   FRONTEND_URL=http://localhost:5173
+   ```
+
+3. **Production Setup:**
+   - Update the callback URL to your production domain
+   - Keep `CLIENT_SECRET` secure and never commit it
+   - Update `FRONTEND_URL` to your production frontend URL
+
+**Security Notes:**
+- GitHub OAuth tokens are exchanged server-side only
+- User emails are verified from GitHub (primary and verified emails prioritized)
+- Users created via OAuth don't have passwords (OAuth only)
+- Email addresses link OAuth and traditional auth (same email = same user)
 
 ### Production Security Checklist
 
@@ -992,6 +1138,8 @@ docker-compose up -d
 
 ## 🔐 Authentication Flow
 
+### Traditional Email/Password Authentication
+
 ```mermaid
 sequenceDiagram
     participant User
@@ -1024,8 +1172,44 @@ sequenceDiagram
     API-->>User: Protected resource
 ```
 
+### GitHub OAuth Authentication Flow
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant Frontend
+    participant API
+    participant GitHub
+    participant Database
+    participant JWT
+
+    User->>Frontend: Click "Login with GitHub"
+    Frontend->>API: GET /githublogin
+    API-->>Frontend: Redirect to GitHub OAuth
+    Frontend->>GitHub: Authorization request
+    GitHub->>User: Login & authorize app
+    User->>GitHub: Approve authorization
+    GitHub-->>API: Redirect with code
+    API->>GitHub: POST /oauth/access_token (code)
+    GitHub-->>API: Access token
+    API->>GitHub: GET /user (with token)
+    GitHub-->>API: User profile data
+    alt Email not public
+        API->>GitHub: GET /user/emails
+        GitHub-->>API: Email list
+    end
+    API->>Database: Find or create user
+    Database-->>API: User data
+    API->>JWT: Generate JWT token
+    JWT-->>API: JWT token
+    API-->>Frontend: Redirect with token & user data
+    Frontend->>Frontend: Store token
+    Frontend-->>User: Logged in successfully
+```
+
 ### Flow Steps
 
+**Traditional Auth:**
 1. **Signup**: User registers with email, username, and password
 2. **Password Hashing**: Password is hashed with bcrypt and salt before database storage
 3. **Login**: User authenticates with email and password
@@ -1037,7 +1221,22 @@ sequenceDiagram
 9. **User Extraction**: User information is extracted from valid token
 10. **Authorization Check**: Chat routes verify the resource belongs to the authenticated user
 11. **Error Handling**: Invalid/expired tokens return 401, unauthorized access returns error message
+
+**GitHub OAuth:**
+1. **Initiate**: User clicks "Login with GitHub" → redirects to `/githublogin`
+2. **GitHub Authorization**: User is redirected to GitHub to authorize the app
+3. **Callback**: GitHub redirects back with authorization code
+4. **Token Exchange**: Backend exchanges code for GitHub access token
+5. **Profile Fetch**: Backend retrieves user profile from GitHub API
+6. **Email Retrieval**: If email is private, fetches from `/user/emails` endpoint
+7. **User Creation/Login**: Creates new user or finds existing user by email
+8. **JWT Generation**: Generates JWT token for the user
+9. **Frontend Redirect**: Redirects to frontend with JWT token and user data as query params
+10. **Token Storage**: Frontend stores token and user data
+11. **Authenticated Session**: User can now access protected routes with the JWT token
 ## 💡 Usage Example
+
+### Traditional Authentication Flow
 
 ```bash
 # 1. Sign up a new user
@@ -1060,8 +1259,32 @@ curl -X POST http://localhost:8000/login \
 # Response: { "User": { ..., "token": "eyJhbG..." }, ... }
 
 # 3. Use token to access protected routes
-curl -X GET http://localhost:8000/protected \
+curl -X GET http://localhost:8000/getuserdata \
   -H "Authorization: Bearer eyJhbG..."
+```
+
+### GitHub OAuth Flow
+
+**For GitHub OAuth, the flow must be initiated in a browser:**
+
+1. **Navigate to:** `http://localhost:8000/githublogin`
+2. **Authorize on GitHub:** User is redirected to GitHub to authorize the app
+3. **Automatic redirect:** After authorization, GitHub redirects back to your backend
+4. **Backend processes:** Creates/finds user and generates JWT token
+5. **Frontend receives:** Redirected to frontend with token in URL:
+   ```
+   http://localhost:5173/auth/github/callback?token=eyJhbG...&user_id=5&user_name=johndoe&email=john@example.com
+   ```
+6. **Frontend code** should extract and store the token:
+   ```javascript
+   const urlParams = new URLSearchParams(window.location.search);
+   const token = urlParams.get('token');
+   const userId = urlParams.get('user_id');
+   localStorage.setItem('authToken', token);
+   localStorage.setItem('userId', userId);
+   ```
+
+### Working with Protected Endpoints
 
 # 4. Upload PDFs (protected - requires token)
 curl -X POST http://localhost:8000/upload-pdfs \
