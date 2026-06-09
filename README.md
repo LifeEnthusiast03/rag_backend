@@ -38,6 +38,12 @@ This project provides a comprehensive REST API that enables users to upload PDF 
 
 The API features a complete authentication system with JWT token-based security, bcrypt password hashing, user authorization for chat access, and persistent conversation history storage for each chat session. All data is stored in PostgreSQL with full relational database support for users, chats, and messages. The LLM responses include structured output with answer, key points, confidence level, source citations, and follow-up suggestions.
 
+### Recent Changes (June 2026)
+- **Performance**: Dual FAISS vector stores are now cached in-memory — subsequent requests for the same chat use RAM instead of disk, significantly reducing latency.
+- **Concurrency**: Document and chat-history retrieval now run **concurrently** via `asyncio.gather`, cutting retrieval time roughly in half.
+- **Retriever tuning**: Top-K results reduced from 20 → 5 for faster, more focused context.
+- **OAuth redirect**: `FRONTEND_URL` now defaults to `http://localhost:5173` for local development (previously pointed to the Vercel deployment).
+
 ## 🚀 Quick Start
 
 ```bash
@@ -97,6 +103,9 @@ uvicorn main:app --reload
 - Dual FAISS vector store system:
   - Document vector store for PDF content
   - Chat history vector store for past conversations
+- **In-memory FAISS cache**: vector stores are loaded from disk once per session and served from RAM on subsequent requests (cache hit/miss logged)
+- **Concurrent retrieval**: document and chat-history retrievers run simultaneously with `asyncio.gather`
+- **Retriever top-K = 5** (tuned down from 20 for faster, more focused responses)
 - Structured output with Pydantic parser
 - Context-aware response generation with:
   - Answer text
@@ -106,6 +115,7 @@ uvicorn main:app --reload
   - Follow-up suggestions
 - Semantic document and chat history retrieval
 - Per-chat isolated vector stores
+- Chat vector store updated and cache-synced after every Q&A pair
 - HuggingFace and sentence transformers integration
 
 ✅ **Chat Management**
@@ -262,7 +272,7 @@ Create a `.env` file in the root directory with the following variables:
 | `CLIENT_ID` | No | None | GitHub OAuth App Client ID |
 | `CLIENT_SECRET` | No | None | GitHub OAuth App Client Secret |
 | `REDIRECT_URI` | No | `http://localhost:8000/github/callback` | GitHub OAuth callback URL |
-| `FRONTEND_URL` | No | `http://localhost:5173` | Frontend URL for OAuth redirects |
+| `FRONTEND_URL` | No | `http://localhost:5173` | Frontend URL for post-OAuth redirect (set to your Vercel URL in production) |
 | `DATABASE_URI` | No | See below | PostgreSQL connection string |
 
 **Example `.env` file:**
@@ -308,7 +318,9 @@ Additional configuration options can be modified in source files:
 - **CORS Origins**: [main.py](main.py) - Default allows all (`*`)
 - **Chunk Size**: [retriver/fas.py](retriver/fas.py) - chunk_size=500, chunk_overlap=300
 - **Embedding Model**: [retriver/fas.py](retriver/fas.py) - `sentence-transformers/all-mpnet-base-v2`
-- **Retrieval Count**: [llm/chatmodel.py](llm/chatmodel.py) - Top 20 results for both document and chat retrieval
+- **Retrieval Count**: [llm/chatmodel.py](llm/chatmodel.py) - Top **5** results for both document and chat retrieval (tuned for speed)
+- **FAISS Cache**: [retriver/fas.py](retriver/fas.py) - In-memory `_vector_store_cache` dict; invalidated when new documents are added
+- **Concurrent Retrieval**: [llm/chatmodel.py](llm/chatmodel.py) - Document + chat retrievers run in parallel via `asyncio.gather`
 
 ### Running the Application
 
