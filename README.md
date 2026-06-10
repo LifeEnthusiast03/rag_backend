@@ -43,6 +43,7 @@ The API features a complete authentication system with JWT token-based security,
 - **Concurrency**: Document and chat-history retrieval now run **concurrently** via `asyncio.gather`, cutting retrieval time roughly in half.
 - **Retriever tuning**: Top-K results reduced from 20 → 5 for faster, more focused context.
 - **OAuth redirect**: `FRONTEND_URL` now defaults to `http://localhost:5173` for local development (previously pointed to the Vercel deployment).
+- **PDF warning suppression**: Added `logging.getLogger("pypdf").setLevel(logging.ERROR)` in `retriver/fas.py` to silence harmless `"Ignoring wrong pointing object"` warnings that appear when processing structurally malformed PDFs (corrupt xref tables). The PDFs are still loaded and processed correctly.
 
 ## 🚀 Quick Start
 

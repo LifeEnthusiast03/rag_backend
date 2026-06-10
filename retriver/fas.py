@@ -6,6 +6,11 @@ from langchain_core.documents import Document
 from uuid import uuid4
 from pathlib import Path
 import os
+import logging
+
+# Suppress "Ignoring wrong pointing object" warnings from malformed PDFs.
+# These are harmless — pypdf recovers automatically and continues loading.
+logging.getLogger("pypdf").setLevel(logging.ERROR)
 
 # Embedding model is loaded ONCE at module level (heavy operation)
 embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-mpnet-base-v2")
