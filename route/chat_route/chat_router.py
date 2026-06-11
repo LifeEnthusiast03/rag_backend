@@ -29,8 +29,10 @@ async def pdfchat(req: ChatRequest,user:Annotated[userdataforapi,Depends(get_cur
         db.commit()
         curchat_fileloc =cur_chat.chat_fileloc
         
-        # Get structured response from LLM
-        llm_response: LLMResponseFormat = await get_response(req,curchat_fileloc)
+        # Get structured response + source citations from LLM
+        llm_response: LLMResponseFormat
+        sources: list
+        llm_response, sources = await get_response(req, curchat_fileloc)
         if not llm_response:
             raise Exception("Failed to generate response")
         
@@ -51,6 +53,7 @@ async def pdfchat(req: ChatRequest,user:Annotated[userdataforapi,Depends(get_cur
             role="assistant",
             timestamp=datetime.now().isoformat(),
             sources_used=len(llm_response.sources_cited) if llm_response.sources_cited else 0,
+            sources=sources,
             error_message=None
         )
     except Exception as e:

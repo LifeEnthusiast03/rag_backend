@@ -39,6 +39,7 @@ This project provides a comprehensive REST API that enables users to upload PDF 
 The API features a complete authentication system with JWT token-based security, bcrypt password hashing, user authorization for chat access, and persistent conversation history storage for each chat session. All data is stored in PostgreSQL with full relational database support for users, chats, and messages. The LLM responses include structured output with answer, key points, confidence level, source citations, and follow-up suggestions.
 
 ### Recent Changes (June 2026)
+- **Source Citations** *(latest)*: The `/chat` endpoint now returns a `sources` array in every response — each entry contains the `filename` (basename of the PDF) and 1-indexed `page` number of the most relevant document chunks. Retrieval uses `similarity_search_with_score` (k=4) and deduplicates results by `(filename, page)` pair. A new `SourceCitation` Pydantic model was added to `models/pymodel.py` and the `ChatResponse` schema now includes `sources: list[SourceCitation]`.
 - **Performance**: Dual FAISS vector stores are now cached in-memory — subsequent requests for the same chat use RAM instead of disk, significantly reducing latency.
 - **Concurrency**: Document and chat-history retrieval now run **concurrently** via `asyncio.gather`, cutting retrieval time roughly in half.
 - **Retriever tuning**: Top-K results reduced from 20 → 5 for faster, more focused context.
@@ -105,14 +106,16 @@ uvicorn main:app --reload
   - Document vector store for PDF content
   - Chat history vector store for past conversations
 - **In-memory FAISS cache**: vector stores are loaded from disk once per session and served from RAM on subsequent requests (cache hit/miss logged)
-- **Concurrent retrieval**: document and chat-history retrievers run simultaneously with `asyncio.gather`
+- **Concurrent retrieval**: document and chat-history retrievers run simultaneously with `asyncio.gather`; `similarity_search_with_score` also runs concurrently as a third task for source extraction
 - **Retriever top-K = 5** (tuned down from 20 for faster, more focused responses)
+- **Source Citations**: every `/chat` response includes a `sources` list with `filename` and 1-indexed `page` for the top-4 most relevant document chunks, deduplicated by `(filename, page)` pair
 - Structured output with Pydantic parser
 - Context-aware response generation with:
   - Answer text
   - Key points extraction
   - Confidence level assessment
-  - Source citations
+  - LLM-generated source citations
+  - FAISS-retrieved source citations (filename + page)
   - Follow-up suggestions
 - Semantic document and chat history retrieval
 - Per-chat isolated vector stores
@@ -575,11 +578,17 @@ POST /chat
   "role": "assistant",
   "timestamp": "2026-02-16T10:30:00",
   "sources_used": 3,
+  "sources": [
+    { "filename": "lecture1.pdf", "page": 3 },
+    { "filename": "notes.pdf",   "page": 12 }
+  ],
   "error_message": null
 }
 ```
 
-**Note**: The `response` field contains a JSON-encoded string with structured LLM output including answer, key points, confidence level, source citations, and follow-up suggestions.
+**Notes**:
+- The `response` field contains a JSON-encoded string with structured LLM output including answer, key points, confidence level, LLM source citations, and follow-up suggestions.
+- The `sources` array contains **FAISS-retrieved citations** — the top-4 most relevant document chunks from `similarity_search_with_score`, deduplicated by `(filename, page)`. Pages are **1-indexed**. This field is `null` on error.
 
 **Error Response**:
 ```json
@@ -590,6 +599,7 @@ POST /chat
   "role": "assistant",
   "timestamp": "2026-02-16T10:30:00",
   "sources_used": null,
+  "sources": null,
   "error_message": "Chat not found or access denied"
 }
 ```

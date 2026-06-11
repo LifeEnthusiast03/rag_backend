@@ -2,11 +2,12 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.prompts import PromptTemplate
 from langchain_core.output_parsers import PydanticOutputParser
 from dotenv import load_dotenv
-from models.pymodel import ChatRequest, LLMResponseFormat
+from models.pymodel import ChatRequest, LLMResponseFormat, SourceCitation
 from retriver.fas import get_vector_store, chat_vector_store, save_chat_vector_store
 from langchain_core.documents import Document
 from uuid import uuid4
 import asyncio
+import os
 
 load_dotenv()
 
@@ -25,10 +26,13 @@ async def get_response(req: ChatRequest, chatfileloc: str):
     retriever_chat = vector_store_chat.as_retriever(search_kwargs={"k": 5})  # was 20
     print("Successfully got retrievers")
 
-    # ── Run both retrieval calls concurrently (was sequential) ────────────────
-    context_docs, context_chat = await asyncio.gather(
+    # ── Run retrieval + source search concurrently ────────────────────────────
+    context_docs, context_chat, source_results = await asyncio.gather(
         retriever_doc.ainvoke(req.question),
         retriever_chat.ainvoke(req.question),
+        asyncio.to_thread(
+            vector_store_doc.similarity_search_with_score, req.question, k=4
+        ),
     )
 
     # Format context strings
@@ -43,6 +47,17 @@ async def get_response(req: ChatRequest, chatfileloc: str):
         if context_chat
         else "No relevant past information"
     )
+
+    # ── Build deduplicated source citations ───────────────────────────────────
+    sources: list[SourceCitation] = []
+    seen: set[tuple[str, int]] = set()
+    for doc, _score in source_results:
+        filename = os.path.basename(doc.metadata.get("source", "unknown"))
+        page = doc.metadata.get("page", 0) + 1  # convert 0-indexed → 1-indexed
+        key = (filename, page)
+        if key not in seen:
+            seen.add(key)
+            sources.append(SourceCitation(filename=filename, page=page))
 
     # ── Pydantic output parser ─────────────────────────────────────────────────
     parser = PydanticOutputParser(pydantic_object=LLMResponseFormat)
@@ -71,7 +86,7 @@ async def get_response(req: ChatRequest, chatfileloc: str):
         "chathistory": chat_history_str,
         "relevant_information": relevant_information,
     })
-
+    print(response)
     # ── Persist Q&A pair to chat vector store and update cache ────────────────
     chat_doc = Document(
         page_content=(
@@ -90,4 +105,4 @@ async def get_response(req: ChatRequest, chatfileloc: str):
     # Persist to disk AND keep cache in sync (avoids stale cache)
     save_chat_vector_store(chatfileloc, vector_store_chat)
 
-    return response
+    return response, sources

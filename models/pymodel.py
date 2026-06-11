@@ -2,6 +2,11 @@ from pydantic import BaseModel,EmailStr
 from typing import List, Optional
 from datetime import datetime
 
+# Source citation returned alongside LLM answers
+class SourceCitation(BaseModel):
+    filename: str
+    page: int
+
 # This two model are for procesing chatRequest
 class chat_his(BaseModel):
     role:str
@@ -85,6 +90,7 @@ class ChatResponse(BaseModel):
       role: str = "assistant"
       timestamp: Optional[str] = None
       sources_used: Optional[int] = None
+      sources: Optional[List[SourceCitation]] = None
       error_message: Optional[str] = None
       
       class Config:
