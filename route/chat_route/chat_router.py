@@ -1,4 +1,5 @@
-from fastapi import APIRouter,Depends,HTTPException
+from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import FileResponse
 from models.pymodel import ChatRequest, ChatResponse, LLMResponseFormat
 from llm.chatmodel import get_response
 from typing import Annotated
@@ -6,8 +7,8 @@ from models.pymodel import userdataforapi
 from utils.protectroute import get_current_user
 from sqlalchemy.orm import Session
 from db.config import init_db
-from db.data_models import Chat,Message
-from models.pymodel import chat,message
+from db.data_models import Chat, Message
+from models.pymodel import chat, message, RenameChatRequest
 from datetime import datetime
 import os
 import shutil
@@ -23,7 +24,7 @@ async def pdfchat(req: ChatRequest,user:Annotated[userdataforapi,Depends(get_cur
         usermessage = Message(
             chat_id=req.chat_id,
             role="user",
-            content=req.question
+            content=req.question,
         )
         db.add(usermessage)
         db.commit()
@@ -36,13 +37,16 @@ async def pdfchat(req: ChatRequest,user:Annotated[userdataforapi,Depends(get_cur
         if not llm_response:
             raise Exception("Failed to generate response")
         
-        # Store the main answer in database
-        systemmessage = Message(
-            chat_id = req.chat_id,
+        # Store structured AI response back into the shared Message table
+        assistant_msg = Message(
+            chat_id=req.chat_id,
             role="assistant",
-            content=llm_response.answer  # Store the answer text
-        ) 
-        db.add(systemmessage)
+            content=llm_response.answer,
+            key_points=llm_response.key_points or [],
+            sources_cited=llm_response.sources_cited or [],
+            follow_up_suggestions=llm_response.follow_up_suggestions or [],
+        )
+        db.add(assistant_msg)
         db.commit()
         
         # Return comprehensive response with all structured data
@@ -95,7 +99,13 @@ def getchatconversation(chatid:int,user:Annotated[userdataforapi,Depends(get_cur
         messages = db.query(Message).filter(Message.chat_id==chatid).order_by(Message.message_id).all();
         chatmessage = []
         for m in messages:
-            chatmessage.append(message(role=m.role,content=m.content))
+            chatmessage.append(message(
+                role=m.role,
+                content=m.content,
+                key_points=m.key_points,
+                sources_cited=m.sources_cited,
+                follow_up_suggestions=m.follow_up_suggestions,
+            ))
         return {
             "messages":chatmessage,
             "Successful":True
@@ -151,3 +161,106 @@ def deletechat(chatid:int,user:Annotated[userdataforapi,Depends(get_current_user
             "message":"Failed to delete chat"
         }
 
+@router.patch("/renamechat")
+def renamechat(
+    req: RenameChatRequest,
+    user: Annotated[userdataforapi, Depends(get_current_user)],
+    db: Annotated[Session, Depends(init_db)],
+):
+    try:
+        chat_to_rename = db.query(Chat).filter(
+            Chat.chat_id == req.chat_id,
+            Chat.user_id == user.user_id,
+        ).first()
+        if not chat_to_rename:
+            raise HTTPException(status_code=404, detail="Chat not found or access denied")
+        chat_to_rename.chat_name = req.chat_name
+        db.commit()
+        return {
+            "Successful": True,
+            "message": "Chat renamed successfully",
+            "chat_id": req.chat_id,
+            "chat_name": req.chat_name,
+        }
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as e:
+        db.rollback()
+        print(f"Failed to rename chat: {e}")
+        return {
+            "Successful": False,
+            "message": "Failed to rename chat",
+        }
+
+
+@router.get("/pdf")
+def get_chat_pdfs(
+    chatid: int,
+    user: Annotated[userdataforapi, Depends(get_current_user)],
+    db: Annotated[Session, Depends(init_db)],
+):
+    """Return metadata for all PDF files belonging to a chat."""
+    try:
+        cur_chat = db.query(Chat).filter(
+            Chat.chat_id == chatid,
+            Chat.user_id == user.user_id,
+        ).first()
+        if not cur_chat:
+            raise HTTPException(status_code=404, detail="Chat not found or access denied")
+
+        folder = cur_chat.chat_fileloc
+        if not os.path.isdir(folder):
+            return {"Successful": True, "files": []}
+
+        pdf_files = [
+            {
+                "filename": f,
+                "size_bytes": os.path.getsize(os.path.join(folder, f)),
+                "download_url": f"/pdf/download?chatid={chatid}&filename={f}",
+            }
+            for f in os.listdir(folder)
+            if f.lower().endswith(".pdf")
+        ]
+        pdf_files.sort(key=lambda x: x["filename"])
+        return {"Successful": True, "files": pdf_files}
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Failed to fetch PDFs: {e}")
+        return {"Successful": False, "files": [], "error": str(e)}
+
+
+@router.get("/pdf/download")
+def download_pdf(
+    chatid: int,
+    filename: str,
+    user: Annotated[userdataforapi, Depends(get_current_user)],
+    db: Annotated[Session, Depends(init_db)],
+):
+    """Stream a single PDF file back to the client."""
+    try:
+        cur_chat = db.query(Chat).filter(
+            Chat.chat_id == chatid,
+            Chat.user_id == user.user_id,
+        ).first()
+        if not cur_chat:
+            raise HTTPException(status_code=404, detail="Chat not found or access denied")
+
+        # Safety: strip any path traversal attempts, allow only the bare filename
+        safe_name = os.path.basename(filename)
+        file_path = os.path.join(cur_chat.chat_fileloc, safe_name)
+
+        if not os.path.isfile(file_path) or not safe_name.lower().endswith(".pdf"):
+            raise HTTPException(status_code=404, detail="File not found")
+
+        return FileResponse(
+            path=file_path,
+            media_type="application/pdf",
+            filename=safe_name,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Failed to download PDF: {e}")
+        raise HTTPException(status_code=500, detail="Failed to serve file")
