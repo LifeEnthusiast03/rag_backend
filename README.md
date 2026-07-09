@@ -34,17 +34,19 @@ A production-ready FastAPI backend service for PDF document processing and intel
 
 ## �📋 Overview
 
-This project provides a comprehensive REST API that enables users to upload PDF documents, process them into a vector database, and interact with the content through an AI-powered chat interface powered by Google Gemini 3 Flash Preview. The system leverages a dual vector store architecture with FAISS for both document retrieval and semantic chat history search, generating structured, contextual responses using Large Language Models with Pydantic output parsing.
+This project provides a comprehensive REST API that enables users to upload PDF documents, process them into a vector database, and interact with the content through an AI-powered chat interface powered by OpenAI's `gpt-4o-mini` via the **OpenAI Agents SDK**. The system leverages a dual vector store architecture with FAISS for both document retrieval and semantic chat history search, generating structured, contextual responses.
 
 The API features a complete authentication system with JWT token-based security, bcrypt password hashing, user authorization for chat access, and persistent conversation history storage for each chat session. All data is stored in PostgreSQL with full relational database support for users, chats, and messages. The LLM responses include structured output with answer, key points, confidence level, source citations, and follow-up suggestions.
 
-### Recent Changes (June 2026)
-- **Source Citations** *(latest)*: The `/chat` endpoint now returns a `sources` array in every response — each entry contains the `filename` (basename of the PDF) and 1-indexed `page` number of the most relevant document chunks. Retrieval uses `similarity_search_with_score` (k=4) and deduplicates results by `(filename, page)` pair. A new `SourceCitation` Pydantic model was added to `models/pymodel.py` and the `ChatResponse` schema now includes `sources: list[SourceCitation]`.
+### Recent Changes
+- **OpenAI Agents SDK Integration** *(latest)*: Transitioned the LLM core from Google Gemini (LangChain) to OpenAI Agents SDK. The agent now dynamically utilizes tools such as `search_knowledge_base`, `search_chat_history`, `generate_citation`, and `web_search` for augmented responses.
+- **Enhanced Chat Message Storage**: Database schema upgraded to store structured AI metadata (`key_points`, `sources_cited`, `follow_up_suggestions`) directly alongside messages, fully exposed via `/getchatconversation`.
+- **New PDF & Rename Routes**: Added `/pdf` and `/pdf/download` routes for managing and fetching uploaded documents. Added `/renamechat` to allow renaming chat sessions.
+- **Source Citations**: The `/chat` endpoint now returns a `sources` array in every response — each entry contains the `filename` (basename of the PDF) and 1-indexed `page` number of the most relevant document chunks. Retrieval uses `similarity_search_with_score` (k=4) and deduplicates results by `(filename, page)` pair.
 - **Performance**: Dual FAISS vector stores are now cached in-memory — subsequent requests for the same chat use RAM instead of disk, significantly reducing latency.
 - **Concurrency**: Document and chat-history retrieval now run **concurrently** via `asyncio.gather`, cutting retrieval time roughly in half.
 - **Retriever tuning**: Top-K results reduced from 20 → 5 for faster, more focused context.
-- **OAuth redirect**: `FRONTEND_URL` now defaults to `http://localhost:5173` for local development (previously pointed to the Vercel deployment).
-- **PDF warning suppression**: Added `logging.getLogger("pypdf").setLevel(logging.ERROR)` in `retriver/fas.py` to silence harmless `"Ignoring wrong pointing object"` warnings that appear when processing structurally malformed PDFs (corrupt xref tables). The PDFs are still loaded and processed correctly.
+- **OAuth redirect**: `FRONTEND_URL` now defaults to `http://localhost:5173` for local development.
 
 ## 🚀 Quick Start
 
@@ -64,7 +66,7 @@ pip install -r requirements.txt
 # 4. Configure environment variables
 # Create .env file with:
 # JWT_SECRET=your-secret-key
-# GOOGLE_API_KEY=your-google-api-key
+# OPENAI_API_KEY=your-openai-api-key
 # Optional for GitHub OAuth:
 # CLIENT_ID=your-github-client-id
 # CLIENT_SECRET=your-github-client-secret
@@ -100,8 +102,8 @@ uvicorn main:app --reload
 - Persistent file storage
 
 ✅ **RAG (Retrieval Augmented Generation)**
-- Google Gemini 3 Flash Preview model
-- Google Generative AI embeddings
+- OpenAI `gpt-4o-mini` model via OpenAI Agents SDK
+- Intelligent Agent Tools: Knowledge Base Search, Chat History Search, Citation Generator, Web Search
 - Dual FAISS vector store system:
   - Document vector store for PDF content
   - Chat history vector store for past conversations
@@ -272,7 +274,7 @@ Create a `.env` file in the root directory with the following variables:
 |----------|----------|---------|-------------|
 | `JWT_SECRET` | Yes | None | Secret key for JWT token signing (min 32 chars) |
 | `JWT_ALGORITHM` | No | `HS256` | Algorithm for JWT encoding |
-| `GOOGLE_API_KEY` | Yes | None | Google Generative AI API key |
+| `OPENAI_API_KEY` | Yes | None | OpenAI API key |
 | `CLIENT_ID` | No | None | GitHub OAuth App Client ID |
 | `CLIENT_SECRET` | No | None | GitHub OAuth App Client Secret |
 | `REDIRECT_URI` | No | `http://localhost:8000/github/callback` | GitHub OAuth callback URL |
@@ -286,7 +288,7 @@ JWT_SECRET=your-super-secret-key-change-in-production-minimum-32-characters
 JWT_ALGORITHM=HS256
 
 # AI Model
-GOOGLE_API_KEY=AIzaSyC...your-actual-key-here
+OPENAI_API_KEY=sk-proj-...your-actual-key-here
 
 # GitHub OAuth (Optional)
 CLIENT_ID=Ov23abc...your-github-client-id
@@ -361,6 +363,9 @@ The API will be available at:
 | POST | `/chat` | Yes | Ask questions about documents |
 | GET | `/getchat` | Yes | Get all user chat sessions |
 | GET | `/getchatconversation` | Yes | Get chat message history |
+| PATCH | `/renamechat` | Yes | Rename a chat session |
+| GET | `/pdf` | Yes | List PDF files in a chat |
+| GET | `/pdf/download` | Yes | Stream a PDF file |
 | DELETE | `/deletechat` | Yes | Delete a chat session and its files |
 
 ### Authentication Routes
@@ -770,13 +775,10 @@ Returns service health status.
 - **psycopg2-binary** - PostgreSQL adapter for Python
 
 ### RAG & AI Components
-- **LangChain Core** - Foundation for LLM application development with Pydantic output parser
+- **OpenAI Agents SDK** - Framework for building tool-using AI agents
 - **LangChain Community** - Community integrations and utilities
-- **LangChain Google GenAI** - Google Gemini 3 Flash Preview integration
-- **LangChain HuggingFace** - HuggingFace model integration
 - **LangChain Text Splitters** - Document chunking utilities
 - **FAISS (CPU)** - Facebook AI Similarity Search for dual vector store operations
-- **Google Generative AI** - Embeddings and structured LLM responses
 - **Sentence Transformers** - Text embeddings for semantic search
 - **HuggingFace** - Model hub integration
 
