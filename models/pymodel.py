@@ -47,9 +47,16 @@ class userdataforapi(BaseModel):
 class chat(BaseModel):
       chat_id:int
       chat_name:str
+class RenameChatRequest(BaseModel):
+      chat_id: int
+      chat_name: str
 class message(BaseModel):
-      role:str
-      content:str
+      role: str
+      content: str
+      # Only present on assistant messages
+      key_points: Optional[List[str]] = None
+      sources_cited: Optional[List[str]] = None
+      follow_up_suggestions: Optional[List[str]] = None
 
 # Model for LangChain Pydantic Output Parser - LLM structured response
 class LLMResponseFormat(BaseModel):
