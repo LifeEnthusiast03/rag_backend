@@ -3,7 +3,7 @@ from typing import List,Annotated
 import shutil
 from pathlib import Path
 from datetime import datetime
-from retriver.fas import load_or_create_vector_store
+from retriver.vector import add_vector_to_db
 from utils.protectroute import get_current_user
 from sqlalchemy.orm import Session
 from models.pymodel import userdataforapi
@@ -49,26 +49,31 @@ async def upload_pdfs(db:Annotated[Session,Depends(init_db)],user:Annotated[user
         finally:
             file.file.close()
     
-    # Load or create vector store after all files are uploaded
+    # Add vectors to pgvector DB after all files are uploaded
     if uploaded_files:
         try:
-            print("entered here")
-            load_or_create_vector_store(batch_dir)
+            # Create chat first to get chat_id for vector storage
             newchat = Chat(
                 chat_name=uploaded_files[0]["filename"],
                 chat_fileloc=str(batch_dir),
-                user_id = user.user_id
+                user_id=user.user_id
             )
             db.add(newchat)
             db.commit()
             db.refresh(newchat)
-            print("here fassi index will be generated in future")
-            
+
+            # Cache these before add_vector_to_db closes the session
+            chat_id = newchat.chat_id
+            chat_name = newchat.chat_name
+
+            # Now embed and store document chunks linked to this chat
+            await add_vector_to_db(chat_id, batch_dir, db)
+
             return {
                 "message": f"Successfully uploaded {len(uploaded_files)} file(s)",
                 "files": uploaded_files,
-                "chat_id": newchat.chat_id,
-                "chat_name":newchat.chat_name,
+                "chat_id": chat_id,
+                "chat_name": chat_name,
                 "errors": errors if errors else None
             }
         except Exception as e:
