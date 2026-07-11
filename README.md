@@ -1,13 +1,13 @@
 # RAG Backend API
 
-A production-ready FastAPI backend service for PDF document processing and intelligent Q&A using Retrieval Augmented Generation (RAG) with LangChain and FAISS vector store.
+A production-ready FastAPI backend service for PDF document processing and intelligent Q&A using Retrieval Augmented Generation (RAG) with the **OpenAI Agents SDK** and **pgvector** for vector similarity search.
 
-[![Python](https://img.shields.io/badge/Python-3.13+-blue.svg)](https://www.python.org/)
-[![FastAPI](https://img.shields.io/badge/FastAPI-0.128+-green.svg)](https://fastapi.tiangolo.com/)
+[![Python](https://img.shields.io/badge/Python-3.11+-blue.svg)](https://www.python.org/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-latest-green.svg)](https://fastapi.tiangolo.com/)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-12+-blue.svg)](https://www.postgresql.org/)
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-## � Table of Contents
+## 📋 Table of Contents
 
 - [Overview](#-overview)
 - [Quick Start](#-quick-start)
@@ -27,26 +27,24 @@ A production-ready FastAPI backend service for PDF document processing and intel
 - [Docker Support](#-docker-support)
 - [Usage Examples](#-usage-example)
 - [Troubleshooting](#-troubleshooting)
-- [Performance](#-performance-considerations)
 - [FAQ](#-frequently-asked-questions-faq)
 - [Contributing](#-contributing)
 - [License](#-license)
 
-## �📋 Overview
+## 📋 Overview
 
-This project provides a comprehensive REST API that enables users to upload PDF documents, process them into a vector database, and interact with the content through an AI-powered chat interface powered by OpenAI's `gpt-4o-mini` via the **OpenAI Agents SDK**. The system leverages a dual vector store architecture with FAISS for both document retrieval and semantic chat history search, generating structured, contextual responses.
+This project provides a comprehensive REST API that enables users to upload PDF documents, process them into **PostgreSQL with pgvector**, and interact with the content through an AI-powered chat interface powered by OpenAI's `gpt-4o-mini` via the **OpenAI Agents SDK**. The system uses a single, unified vector store backed entirely by PostgreSQL — no separate FAISS files on disk.
 
-The API features a complete authentication system with JWT token-based security, bcrypt password hashing, user authorization for chat access, and persistent conversation history storage for each chat session. All data is stored in PostgreSQL with full relational database support for users, chats, and messages. The LLM responses include structured output with answer, key points, confidence level, source citations, and follow-up suggestions.
+The API features a complete authentication system with JWT token-based security, bcrypt password hashing, user authorization for chat access, and persistent conversation history storage in PostgreSQL. LLM responses include structured output with answer, key points, confidence level, source citations, and follow-up suggestions. Both uploaded document chunks **and** Q&A history pairs are stored as vector embeddings in the `document_chunk` table, enabling semantic retrieval across all previous interactions.
 
 ### Recent Changes
-- **OpenAI Agents SDK Integration** *(latest)*: Transitioned the LLM core from Google Gemini (LangChain) to OpenAI Agents SDK. The agent now dynamically utilizes tools such as `search_knowledge_base`, `search_chat_history`, `generate_citation`, and `web_search` for augmented responses.
-- **Enhanced Chat Message Storage**: Database schema upgraded to store structured AI metadata (`key_points`, `sources_cited`, `follow_up_suggestions`) directly alongside messages, fully exposed via `/getchatconversation`.
-- **New PDF & Rename Routes**: Added `/pdf` and `/pdf/download` routes for managing and fetching uploaded documents. Added `/renamechat` to allow renaming chat sessions.
-- **Source Citations**: The `/chat` endpoint now returns a `sources` array in every response — each entry contains the `filename` (basename of the PDF) and 1-indexed `page` number of the most relevant document chunks. Retrieval uses `similarity_search_with_score` (k=4) and deduplicates results by `(filename, page)` pair.
-- **Performance**: Dual FAISS vector stores are now cached in-memory — subsequent requests for the same chat use RAM instead of disk, significantly reducing latency.
-- **Concurrency**: Document and chat-history retrieval now run **concurrently** via `asyncio.gather`, cutting retrieval time roughly in half.
-- **Retriever tuning**: Top-K results reduced from 20 → 5 for faster, more focused context.
-- **OAuth redirect**: `FRONTEND_URL` now defaults to `http://localhost:5173` for local development.
+- **pgvector migration** *(latest)*: Replaced FAISS on-disk vector stores with PostgreSQL + pgvector. The `document_chunk` table stores embeddings (768-dim) for both PDF chunks and Q&A history. No FAISS files are written to disk.
+- **OpenAI Agents SDK**: The LLM core uses the OpenAI Agents SDK (`openai-agents`). The agent dynamically calls `search_knowledge_base`, `search_chat_history`, `generate_citation`, and `WebSearchTool`.
+- **Embedded Q&A history**: After every `/chat` response, the user question and the Q&A pair are each embedded and saved as `DocumentChunk` rows, making past answers retrievable by future queries.
+- **Structured AI message storage**: Assistant messages in the `Message` table now persist `key_points`, `sources_cited`, and `follow_up_suggestions` as JSON columns, fully exposed via `/getchatconversation`.
+- **PDF management routes**: Added `GET /pdf` to list PDFs in a chat and `GET /pdf/download` to stream a specific PDF back to the client.
+- **Chat rename route**: Added `PATCH /renamechat` to rename a chat session.
+- **Source citations**: Every `/chat` response includes a `sources` array where each entry contains `filename` and 1-indexed `page` derived from the top-4 nearest `DocumentChunk` rows (deduplicated by `(filename, page)`).
 
 ## 🚀 Quick Start
 
@@ -63,17 +61,15 @@ myenv\Scripts\activate  # Windows
 # 3. Install dependencies
 pip install -r requirements.txt
 
-# 4. Configure environment variables
-# Create .env file with:
-# JWT_SECRET=your-secret-key
-# OPENAI_API_KEY=your-openai-api-key
-# Optional for GitHub OAuth:
-# CLIENT_ID=your-github-client-id
-# CLIENT_SECRET=your-github-client-secret
-# FRONTEND_URL=http://localhost:5173
-
-# 5. Start PostgreSQL and create database
+# 4. Set up PostgreSQL with pgvector extension
 # psql -U postgres -c "CREATE DATABASE rag_database;"
+# psql -U postgres -d rag_database -c "CREATE EXTENSION IF NOT EXISTS vector;"
+
+# 5. Configure environment variables (.env file)
+# JWT_SECRET=your-secret-key
+# OPENAI_API_KEY=sk-proj-...
+# DATABASE_URI=postgresql://postgres:password@localhost:5432/rag_database
+# Optional: CLIENT_ID, CLIENT_SECRET, FRONTEND_URL (GitHub OAuth)
 
 # 6. Run the application
 uvicorn main:app --reload
@@ -96,61 +92,58 @@ uvicorn main:app --reload
 
 ✅ **Document Processing**
 - Multi-file PDF upload support
-- Automatic text extraction from PDFs
-- Intelligent document chunking
+- Automatic text extraction from PDFs using `PyPDFDirectoryLoader`
+- Intelligent document chunking with `RecursiveCharacterTextSplitter`
 - Batch organization with timestamps
-- Persistent file storage
+- Persistent file storage in `uploads/<timestamp>/`
 
 ✅ **RAG (Retrieval Augmented Generation)**
-- OpenAI `gpt-4o-mini` model via OpenAI Agents SDK
-- Intelligent Agent Tools: Knowledge Base Search, Chat History Search, Citation Generator, Web Search
-- Dual FAISS vector store system:
-  - Document vector store for PDF content
-  - Chat history vector store for past conversations
-- **In-memory FAISS cache**: vector stores are loaded from disk once per session and served from RAM on subsequent requests (cache hit/miss logged)
-- **Concurrent retrieval**: document and chat-history retrievers run simultaneously with `asyncio.gather`; `similarity_search_with_score` also runs concurrently as a third task for source extraction
-- **Retriever top-K = 5** (tuned down from 20 for faster, more focused responses)
-- **Source Citations**: every `/chat` response includes a `sources` list with `filename` and 1-indexed `page` for the top-4 most relevant document chunks, deduplicated by `(filename, page)` pair
-- Structured output with Pydantic parser
-- Context-aware response generation with:
-  - Answer text
-  - Key points extraction
-  - Confidence level assessment
-  - LLM-generated source citations
-  - FAISS-retrieved source citations (filename + page)
-  - Follow-up suggestions
-- Semantic document and chat history retrieval
-- Per-chat isolated vector stores
-- Chat vector store updated and cache-synced after every Q&A pair
-- HuggingFace and sentence transformers integration
+- OpenAI `gpt-4o-mini` model via **OpenAI Agents SDK**
+- Intelligent agent tools:
+  - `search_knowledge_base` — cosine similarity search over pgvector `document_chunk` table
+  - `search_chat_history` — fetches the last 10 messages from the `Message` table
+  - `generate_citation` — formats a proper citation for document content
+  - `WebSearchTool` — built-in SDK web search for information outside uploaded docs
+- **pgvector storage**: all embeddings (document chunks + Q&A history) stored in PostgreSQL `document_chunk` table; 768-dimensional vectors using `sentence-transformers/all-mpnet-base-v2`
+- **Retriever top-K = 5** for `search_knowledge_base`; top-4 used for source citations
+- **Source Citations**: every `/chat` response includes a `sources` list with `filename` and 1-indexed `page`, deduplicated by `(filename, page)` pair
+- Structured output with Pydantic output type (`LLMResponseFormat`):
+  - `answer` — main response text
+  - `key_points` — extracted key bullet points
+  - `confidence_level` — `"high"`, `"medium"`, or `"low"`
+  - `sources_cited` — LLM-generated source references
+  - `needs_clarification` / `clarification_needed` — clarification flags
+  - `follow_up_suggestions` — suggested follow-up questions
+- Per-chat isolated retrieval scoped by `chat_id`
 
 ✅ **Chat Management**
 - Multiple chat sessions per user
-- Create new chats with PDF uploads
-- Delete chats with automatic cleanup (files + database)
-- Full conversation history storage in both:
-  - PostgreSQL database for persistence
-  - FAISS vector store for semantic retrieval
-- Message persistence with role-based storage (user/assistant)
+- Create new chats automatically on PDF upload
+- Rename chat sessions via `/renamechat`
+- Delete chats with automatic cleanup (files + all database records including embeddings)
+- Full conversation history stored in PostgreSQL `Message` table
+- Structured assistant messages: `key_points`, `sources_cited`, `follow_up_suggestions` persisted as JSON
+- Retrieve past conversations with full structured data via `/getchatconversation`
 - Chat ownership verification for security
-- Retrieve past conversations
-- Semantic search across chat history
-- Structured JSON response format
+
+✅ **PDF File Management**
+- List all PDFs belonging to a chat (`GET /pdf`)
+- Stream / download individual PDF files (`GET /pdf/download`)
+- Path-traversal-safe filename handling
 
 ✅ **API Features**
-- RESTful API design
+- RESTful API design with FastAPI
 - Interactive Swagger documentation (`/docs`)
 - Alternative ReDoc documentation (`/redoc`)
 - CORS enabled for frontend integration
-- Comprehensive error handling
+- Comprehensive error handling and transaction rollback
 - Health check endpoint
 
 ✅ **Data Management**
 - PostgreSQL database with SQLAlchemy ORM
-- Relational data model (Users, Chats, Messages)
-- Database transaction safety
-- Automatic rollback on errors
-- Async database operations
+- Relational data model: `Users`, `Chat`, `Message`, `DocumentChunk`
+- `DocumentChunk` stores both PDF content embeddings and Q&A history embeddings
+- Database transaction safety with automatic rollback on errors
 
 ### Technical Features
 - 🚀 **High Performance**: FastAPI framework with async support
@@ -158,55 +151,62 @@ uvicorn main:app --reload
 - 📦 **Modular Architecture**: Organized routers and utilities
 - 🐳 **Docker Ready**: Containerization support
 - 🔧 **Type Safety**: Pydantic models for validation
-- 📊 **Scalable**: Designed for production deployment
+- 📊 **Scalable**: pgvector enables production-grade vector search within PostgreSQL
 
 ## 🏗️ Project Structure
 
 ```
 rag_backend/
+├── agent/                   # OpenAI Agents SDK agent definition
+│   ├── __init__.py
+│   └── rag_agent.py        # RAGContext dataclass, function tools, agent instantiation
 ├── db/                      # Database configuration and models
-│   ├── config.py           # Database session management
+│   ├── config.py           # Database session dependency (init_db)
 │   ├── database.py         # SQLAlchemy engine and connection
-│   └── data_models.py      # User, Chat, and Message table models
-├── llm/                     # Language model integration
-│   └── chatmodel.py        # Structured chat response generation with Pydantic parser
-├── models/                  # Pydantic models
+│   └── data_models.py      # Users, Chat, Message, DocumentChunk table models
+├── llm/                     # LLM response layer
+│   └── chatmodel.py        # get_response() — runs the agent and builds source citations
+├── models/                  # Pydantic schemas
 │   └── pymodel.py          # Request/Response schemas and LLMResponseFormat
-├── retriver/                # Document retrieval system
-│   └── fas.py              # Dual FAISS vector store (document + chat history)
+├── retriver/                # Embedding and retrieval utilities
+│   ├── embedding.py        # HuggingFace embeddings instance (sentence-transformers)
+│   ├── fas.py              # Legacy FAISS helpers (unused by current routes)
+│   ├── retriver.py         # similarityretriver() — pgvector cosine distance search
+│   ├── text_spilter.py     # RecursiveCharacterTextSplitter instance
+│   └── vector.py           # add_vector_to_db() — load PDFs and insert DocumentChunk rows
 ├── route/                   # API route handlers (modular routers)
-│   ├── auth_route/         # Authentication endpoints
-│   │   ├── auth_router.py  # Signup and login routes (email/password)
-│   │   └── auth_github_route.py # GitHub OAuth login routes
-│   ├── chat_route/         # Chat endpoints
-│   │   └── chat_router.py  # Document Q&A and chat management routes
-│   └── upload_route/       # Upload endpoints
-│       └── upload_router.py # PDF upload routes
+│   ├── auth_route/
+│   │   ├── auth_router.py       # POST /signup, POST /login
+│   │   └── auth_github_route.py # GET /githublogin, GET /github/callback
+│   ├── chat_route/
+│   │   └── chat_router.py       # POST /chat, GET /getchat, GET /getchatconversation,
+│   │                            # PATCH /renamechat, DELETE /deletechat,
+│   │                            # GET /pdf, GET /pdf/download
+│   └── upload_route/
+│       └── upload_router.py     # POST /upload-pdfs
 ├── utils/                   # Utility functions
 │   ├── hash.py             # Password hashing with bcrypt
 │   ├── jwt.py              # JWT token generation and verification
-│   └── protectroute.py     # Protected route middleware
+│   └── protectroute.py     # get_current_user dependency
 ├── uploads/                 # PDF storage directory (timestamped batches)
-│   └── YYYYMMDD_HHMMSS/    # Each batch contains:
-│       ├── *.pdf            # Uploaded PDF files
-│       ├── faiss_index_doc/ # Document vector store
-│       └── faiss_index_chat/# Chat history vector store
-├── main.py                  # FastAPI application and router registration
+│   └── YYYYMMDD_HHMMSS/    # Each batch directory contains uploaded PDF files
+├── main.py                  # FastAPI app, CORS, and router registration
 ├── requirements.txt         # Python dependencies
-├── Dockerfile              # Container configuration
-└── .env                     # Environment variables (JWT_SECRET, etc.)
+├── Dockerfile               # Container configuration
+├── docker-compose.yml       # Compose file for app + PostgreSQL
+└── .env                     # Environment variables (not committed)
 ```
 
 ## 🚀 Getting Started
 
 ### Prerequisites
 
-- **Python 3.13+** (This project uses Python 3.13)
-- **PostgreSQL database** (Version 12 or higher recommended)
-- **Google Generative AI API Key** (Required for embeddings and LLM)
-- **GitHub OAuth App** (Optional, for social login feature)
-- **Virtual environment** (Strongly recommended for dependency isolation)
-- **Git** (For cloning the repository)
+- **Python 3.11+**
+- **PostgreSQL 12+** with the **pgvector** extension installed
+- **OpenAI API Key** (required for the LLM agent)
+- **GitHub OAuth App** (optional, for social login)
+- **Virtual environment** (strongly recommended)
+- **Git**
 
 ### Installation
 
@@ -215,7 +215,6 @@ rag_backend/
    git clone <your-repository-url>
    cd rag_backend
    ```
-   *Replace `<your-repository-url>` with your actual Git repository URL.*
 
 2. **Create and activate virtual environment**
    ```bash
@@ -231,118 +230,90 @@ rag_backend/
    pip install -r requirements.txt
    ```
 
-4. **Configure database**
-   - Create a PostgreSQL database named `rag_database`
-   - Update connection string in `db/database.py` if needed:
-     ```python
-     DATABASE_URI = "postgresql://postgres:password@localhost:5432/rag_database"
-     ```
+4. **Set up PostgreSQL with pgvector**
+   ```sql
+   -- Create the database
+   CREATE DATABASE rag_database;
+
+   -- Enable pgvector (must be done once per database)
+   \c rag_database
+   CREATE EXTENSION IF NOT EXISTS vector;
+   ```
 
 5. **Set up environment variables**
-   - Create a `.env` file in the root directory (`rag_backend/`) with the following configuration:
-     ```env
-     # JWT Configuration
-     JWT_SECRET=your-secret-key-change-this-in-production-use-strong-random-string
-     JWT_ALGORITHM=HS256
-     
-     # Google Generative AI API Key (Required)
-     GOOGLE_API_KEY=your-google-api-key-here
-     
-     # GitHub OAuth (Optional - for social login)
-     CLIENT_ID=your-github-oauth-client-id
-     CLIENT_SECRET=your-github-oauth-client-secret
-     REDIRECT_URI=http://localhost:8000/github/callback
-     FRONTEND_URL=http://localhost:5173
-     ```
-   - **Important**: 
-     - Generate a strong `JWT_SECRET` for production (minimum 32 characters)
-     - Obtain `GOOGLE_API_KEY` from [Google AI Studio](https://makersuite.google.com/app/apikey)
-     - For GitHub OAuth, create an OAuth App at [GitHub Developer Settings](https://github.com/settings/developers)
-     - Never commit the `.env` file to version control (already in `.gitignore`)
 
-6. **Initialize the database**
-   - The application will automatically create tables on first run
-   - Ensure your PostgreSQL service is running
+   Create a `.env` file in the project root:
+   ```env
+   # JWT Configuration
+   JWT_SECRET=your-super-secret-key-minimum-32-characters
+   JWT_ALGORITHM=HS256
+
+   # OpenAI (Required for the RAG agent)
+   OPENAI_API_KEY=sk-proj-...your-key-here
+   OPENAI_MODEL=gpt-4o-mini   # optional, defaults to gpt-4o-mini
+
+   # PostgreSQL connection string
+   DATABASE_URI=postgresql://postgres:password@localhost:5432/rag_database
+
+   # GitHub OAuth (Optional)
+   CLIENT_ID=your-github-oauth-client-id
+   CLIENT_SECRET=your-github-oauth-client-secret
+   REDIRECT_URI=http://localhost:8000/github/callback
+   FRONTEND_URL=http://localhost:5173
+   ```
+
+   > **Important**:
+   > - Generate a strong `JWT_SECRET` (minimum 32 characters) for production.
+   > - Obtain `OPENAI_API_KEY` from [platform.openai.com](https://platform.openai.com/api-keys).
+   > - For GitHub OAuth, create an OAuth App at [GitHub Developer Settings](https://github.com/settings/developers).
+   > - Never commit `.env` to version control (already in `.gitignore`).
+
+6. **Start the application** — SQLAlchemy will create all tables automatically on first run.
 
 ## ⚙️ Configuration
 
 ### Environment Variables
 
-Create a `.env` file in the root directory with the following variables:
-
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `JWT_SECRET` | Yes | None | Secret key for JWT token signing (min 32 chars) |
-| `JWT_ALGORITHM` | No | `HS256` | Algorithm for JWT encoding |
-| `OPENAI_API_KEY` | Yes | None | OpenAI API key |
-| `CLIENT_ID` | No | None | GitHub OAuth App Client ID |
-| `CLIENT_SECRET` | No | None | GitHub OAuth App Client Secret |
+| `JWT_SECRET` | Yes | — | Secret key for JWT signing (min 32 chars) |
+| `JWT_ALGORITHM` | No | `HS256` | JWT encoding algorithm |
+| `OPENAI_API_KEY` | Yes | — | OpenAI API key for the agent |
+| `OPENAI_MODEL` | No | `gpt-4o-mini` | OpenAI model name used by the agent |
+| `DATABASE_URI` | Yes | — | PostgreSQL connection string (must include pgvector DB) |
+| `CLIENT_ID` | No | — | GitHub OAuth App Client ID |
+| `CLIENT_SECRET` | No | — | GitHub OAuth App Client Secret |
 | `REDIRECT_URI` | No | `http://localhost:8000/github/callback` | GitHub OAuth callback URL |
-| `FRONTEND_URL` | No | `http://localhost:5173` | Frontend URL for post-OAuth redirect (set to your Vercel URL in production) |
-| `DATABASE_URI` | No | See below | PostgreSQL connection string |
+| `FRONTEND_URL` | No | `http://localhost:5173` | Frontend URL for post-OAuth redirect |
 
-**Example `.env` file:**
-```env
-# Security
-JWT_SECRET=your-super-secret-key-change-in-production-minimum-32-characters
-JWT_ALGORITHM=HS256
+### Application Settings
 
-# AI Model
-OPENAI_API_KEY=sk-proj-...your-actual-key-here
+Other tuneable settings in source files:
 
-# GitHub OAuth (Optional)
-CLIENT_ID=Ov23abc...your-github-client-id
-CLIENT_SECRET=your-github-client-secret
-REDIRECT_URI=http://localhost:8000/github/callback
-FRONTEND_URL=http://localhost:5173
-
-# Database (optional if using default)
-# DATABASE_URI=postgresql://postgres:password@localhost:5432/rag_database
-```
-
-### Database Configuration
-
-The database connection is configured in [db/database.py](db/database.py). Default connection:
-```python
-DATABASE_URI = "postgresql://postgres:password@localhost:5432/rag_database"
-```
-
-**Customize for production:**
-```python
-import os
-from dotenv import load_dotenv
-
-load_dotenv()
-DATABASE_URI = os.getenv("DATABASE_URI", "postgresql://postgres:password@localhost:5432/rag_database")
-```
-
-**Application Settings**
-
-Additional configuration options can be modified in source files:
-- **JWT Token Expiration**: [utils/jwt.py](utils/jwt.py) - Default 24 hours
-- **Upload Directory**: [route/upload_route/upload_router.py](route/upload_route/upload_router.py) - Default `uploads/`
-- **CORS Origins**: [main.py](main.py) - Default allows all (`*`)
-- **Chunk Size**: [retriver/fas.py](retriver/fas.py) - chunk_size=500, chunk_overlap=300
-- **Embedding Model**: [retriver/fas.py](retriver/fas.py) - `sentence-transformers/all-mpnet-base-v2`
-- **Retrieval Count**: [llm/chatmodel.py](llm/chatmodel.py) - Top **5** results for both document and chat retrieval (tuned for speed)
-- **FAISS Cache**: [retriver/fas.py](retriver/fas.py) - In-memory `_vector_store_cache` dict; invalidated when new documents are added
-- **Concurrent Retrieval**: [llm/chatmodel.py](llm/chatmodel.py) - Document + chat retrievers run in parallel via `asyncio.gather`
+| Setting | Location | Default |
+|---------|----------|---------|
+| JWT expiration | `utils/jwt.py` | 24 hours |
+| Upload directory | `route/upload_route/upload_router.py` | `uploads/` |
+| CORS origins | `main.py` | `*` (all) |
+| Embedding model | `retriver/embedding.py` | `sentence-transformers/all-mpnet-base-v2` (768-dim) |
+| Chunk size / overlap | `retriver/text_spilter.py` | 500 / 300 |
+| Retriever top-K (agent) | `agent/rag_agent.py` → `search_knowledge_base` | 5 |
+| Source citation top-K | `llm/chatmodel.py` | 4 |
 
 ### Running the Application
 
-**Option 1: Development Mode (with auto-reload)**
+**Development mode (with auto-reload):**
 ```bash
 uvicorn main:app --reload
 ```
 
-**Option 2: Production Mode**
+**Production mode:**
 ```bash
 uvicorn main:app --host 0.0.0.0 --port 8000 --workers 4
 ```
 
-The API will be available at:
+The API is available at:
 - Local: `http://127.0.0.1:8000`
-- Network: `http://0.0.0.0:8000` (production)
 - Interactive API Docs: `http://127.0.0.1:8000/docs`
 - Alternative Docs: `http://127.0.0.1:8000/redoc`
 
@@ -350,23 +321,25 @@ The API will be available at:
 
 ### Endpoints Summary
 
-| Method | Endpoint | Authentication | Description |
-|--------|----------|----------------|-------------|
+| Method | Endpoint | Auth | Description |
+|--------|----------|------|-------------|
 | GET | `/` | No | API status check |
 | GET | `/health` | No | Health check endpoint |
 | POST | `/signup` | No | User registration |
-| POST | `/login` | No | User authentication |
+| POST | `/login` | No | User authentication (returns JWT) |
 | GET | `/githublogin` | No | Initiate GitHub OAuth flow |
 | GET | `/github/callback` | No | GitHub OAuth callback handler |
-| GET | `/getuserdata` | Yes | Get current user data |
-| POST | `/upload-pdfs` | Yes | Upload PDF files |
-| POST | `/chat` | Yes | Ask questions about documents |
-| GET | `/getchat` | Yes | Get all user chat sessions |
-| GET | `/getchatconversation` | Yes | Get chat message history |
+| GET | `/getuserdata` | Yes | Get current user data from token |
+| POST | `/upload-pdfs` | Yes | Upload PDF files and create a chat |
+| POST | `/chat` | Yes | Ask questions about uploaded documents |
+| GET | `/getchat` | Yes | List all user chat sessions |
+| GET | `/getchatconversation` | Yes | Get full message history for a chat |
 | PATCH | `/renamechat` | Yes | Rename a chat session |
 | GET | `/pdf` | Yes | List PDF files in a chat |
-| GET | `/pdf/download` | Yes | Stream a PDF file |
-| DELETE | `/deletechat` | Yes | Delete a chat session and its files |
+| GET | `/pdf/download` | Yes | Stream/download a specific PDF |
+| DELETE | `/deletechat` | Yes | Delete a chat and all associated data |
+
+---
 
 ### Authentication Routes
 
@@ -374,9 +347,7 @@ The API will be available at:
 ```http
 POST /signup
 ```
-**Description**: Register a new user account.
-
-**Request Body**:
+**Request Body:**
 ```json
 {
   "user_name": "John Doe",
@@ -384,15 +355,10 @@ POST /signup
   "password": "securePassword123"
 }
 ```
-
-**Response**:
+**Response:**
 ```json
 {
-  "User": {
-    "user_id": 1,
-    "user_name": "John Doe",
-    "email": "john@example.com"
-  },
+  "User": { "user_id": 1, "user_name": "John Doe", "email": "john@example.com" },
   "Successful": true,
   "message": "User created successfully"
 }
@@ -402,22 +368,15 @@ POST /signup
 ```http
 POST /login
 ```
-**Description**: Login and receive JWT authentication token.
-
-**Request Body**:
+**Request Body:**
 ```json
-{
-  "email": "john@example.com",
-  "password": "securePassword123"
-}
+{ "email": "john@example.com", "password": "securePassword123" }
 ```
-
-**Response**:
+**Response:**
 ```json
 {
   "User": {
-    "user_id": 1,
-    "user_name": "John Doe",
+    "user_id": 1, "user_name": "John Doe",
     "email": "john@example.com",
     "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
   },
@@ -430,736 +389,419 @@ POST /login
 ```http
 GET /githublogin
 ```
-**Description**: Initiates GitHub OAuth authentication flow. Redirects user to GitHub for authorization.
-
-**Authentication**: Not required
-
-**Usage**: Direct browser to this endpoint
-```
-http://localhost:8000/githublogin
-```
-
-**Behavior**: 
-- Redirects to GitHub authorization page
-- User authorizes the application
-- GitHub redirects back to `/github/callback`
-
-**Note**: Cannot be tested from Swagger UI. Must open in browser.
+Redirects the browser to GitHub for authorization. Must be opened directly in a browser (cannot be tested from Swagger UI).
 
 #### 4. GitHub OAuth Callback
 ```http
 GET /github/callback?code={authorization_code}
 ```
-**Description**: Handles GitHub OAuth callback. Exchanges authorization code for access token, retrieves user data, creates/finds user in database, and redirects to frontend with JWT token.
-
-**Authentication**: Not required (handled by OAuth flow)
-
-**Query Parameters**:
-- `code` (string, required): GitHub authorization code
-
-**Behavior**:
-1. Exchanges code for GitHub access token
-2. Fetches user profile from GitHub API
-3. Retrieves email (including from private emails if needed)
-4. Creates new user or finds existing user by email
-5. Generates JWT token for the user
-6. Redirects to frontend with token and user data
-
-**Redirect URL Format**:
+Exchanges the GitHub code for a user JWT and redirects to:
 ```
-{FRONTEND_URL}/auth/github/callback?token={jwt_token}&user_id={id}&user_name={name}&email={email}
+{FRONTEND_URL}/auth/github/callback?token={jwt}&user_id={id}&user_name={name}&email={email}
 ```
-
-**Example**:
-```
-http://localhost:5173/auth/github/callback?token=eyJhbG...&user_id=5&user_name=johndoe&email=john@example.com
-```
-
-**Error Responses**:
-- `500`: GitHub OAuth not configured (missing CLIENT_ID/SECRET)
-- `400`: Failed to get access token or user data
-- `400`: Unable to retrieve email from GitHub account
 
 #### 5. Get User Data
 ```http
 GET /getuserdata
+Authorization: Bearer <token>
 ```
-**Description**: Get authenticated user's data from JWT token.
-
-**Authentication**: Required (Bearer Token)
-
-**Headers**: 
-```
-Authorization: Bearer <your_jwt_token>
-```
-
-**Response**:
+**Response:**
 ```json
-{
-  "user": {
-    "user_id": 1,
-    "user_name": "John Doe",
-    "email": "john@example.com"
-  }
-}
+{ "user": { "user_id": 1, "user_name": "John Doe", "email": "john@example.com" } }
 ```
+
+---
 
 ### Document Management Routes
 
 #### 6. Upload PDFs
 ```http
 POST /upload-pdfs
+Authorization: Bearer <token>
+Content-Type: multipart/form-data
 ```
-**Description**: Upload one or multiple PDF files for processing. Creates a chat session and processes documents into vector store.
+**Body:** `files` — one or more PDF files.
 
-**Authentication**: Required (Bearer Token)
+**Behaviour:**
+1. Saves PDFs to `uploads/<YYYYMMDD_HHMMSS>/`
+2. Creates a `Chat` record (named after the first file)
+3. Loads PDFs, splits into chunks, generates embeddings, inserts `DocumentChunk` rows into PostgreSQL
 
-**Request**: 
-- Content-Type: `multipart/form-data`
-- Body: `files` (List of PDF files)
-- Headers: `Authorization: Bearer <token>`
-
-**Response**:
+**Response:**
 ```json
 {
   "message": "Successfully uploaded 2 file(s)",
   "files": [
-    {
-      "filename": "document.pdf",
-      "size": 124567,
-      "path": "uploads/20260210_223829/document.pdf",
-      "batch": "20260210_223829"
-    }
+    { "filename": "document.pdf", "size": 124567, "path": "uploads/20260210_223829/document.pdf", "batch": "20260210_223829" }
   ],
   "chat_id": 1,
+  "chat_name": "document.pdf",
   "errors": null
 }
 ```
 
-**Error Response** (Vector store creation fails):
+#### 7. List PDFs in a Chat
+```http
+GET /pdf?chatid=1
+Authorization: Bearer <token>
+```
+Returns metadata for every PDF file in the chat's upload directory.
+
+**Response:**
 ```json
 {
-  "message": "Files uploaded but vector store update failed: <error details>",
-  "files": [...],
-  "chat_id": null,
-  "errors": []
+  "Successful": true,
+  "files": [
+    { "filename": "lecture1.pdf", "size_bytes": 204800, "download_url": "/pdf/download?chatid=1&filename=lecture1.pdf" }
+  ]
 }
 ```
 
+#### 8. Download a PDF
+```http
+GET /pdf/download?chatid=1&filename=lecture1.pdf
+Authorization: Bearer <token>
+```
+Streams the PDF file back to the client with `Content-Type: application/pdf`. Performs path-traversal sanitization (only the basename is used).
+
+---
+
 ### Chat Routes
 
-#### 7. Chat with Documents
+#### 9. Chat with Documents
 ```http
 POST /chat
+Authorization: Bearer <token>
 ```
-**Description**: Ask questions about uploaded documents. Maintains conversation history in database.
-
-**Authentication**: Required (Bearer Token)
-
-**Request Body**:
+**Request Body:**
 ```json
 {
   "chat_id": 1,
   "question": "What is the main topic of the document?",
   "chat_history": [
-    {
-      "role": "user",
-      "content": "Previous question"
-    },
-    {
-      "role": "assistant",
-      "content": "Previous answer"
-    }
+    { "role": "user", "content": "Previous question" },
+    { "role": "assistant", "content": "Previous answer" }
   ]
 }
 ```
 
-**Response**:
+**Processing flow:**
+1. Verifies chat ownership
+2. Stores user message in `Message` table and embeds question as `DocumentChunk`
+3. Runs the RAG agent (searches knowledge base, chat history, optionally web)
+4. Stores structured assistant message in `Message` table
+5. Embeds the Q&A pair as a new `DocumentChunk` for future retrieval
+6. Queries top-4 nearest `DocumentChunk` rows for source citations
+
+**Response:**
 ```json
 {
   "success": true,
   "chat_id": 1,
-  "response": "{\"answer\": \"Based on the uploaded documents, the main topic is...\", \"key_points\": [\"Point 1\", \"Point 2\"], \"confidence_level\": \"high\", \"sources_cited\": [\"document.pdf - page 2\"], \"needs_clarification\": false, \"follow_up_suggestions\": [\"Related question 1?\", \"Related question 2?\"]}",
+  "response": "{\"answer\": \"Based on the uploaded documents...\", \"key_points\": [\"Point 1\"], \"confidence_level\": \"high\", \"sources_cited\": [\"document.pdf - page 2\"], \"needs_clarification\": false, \"follow_up_suggestions\": [\"Related question?\"]}",
   "role": "assistant",
-  "timestamp": "2026-02-16T10:30:00",
-  "sources_used": 3,
+  "timestamp": "2026-07-11T10:30:00",
+  "sources_used": 2,
   "sources": [
     { "filename": "lecture1.pdf", "page": 3 },
-    { "filename": "notes.pdf",   "page": 12 }
+    { "filename": "notes.pdf", "page": 12 }
   ],
   "error_message": null
 }
 ```
 
-**Notes**:
-- The `response` field contains a JSON-encoded string with structured LLM output including answer, key points, confidence level, LLM source citations, and follow-up suggestions.
-- The `sources` array contains **FAISS-retrieved citations** — the top-4 most relevant document chunks from `similarity_search_with_score`, deduplicated by `(filename, page)`. Pages are **1-indexed**. This field is `null` on error.
+> **Note on `response` field**: This is a JSON-encoded string containing the full `LLMResponseFormat` object. Parse it with `JSON.parse()` on the client side.
+>
+> **Note on `sources`**: These are pgvector-retrieved citations from the `document_chunk` table (top-4, deduplicated by `(filename, page)`). Pages are 1-indexed. This field is `null` on error.
 
-**Error Response**:
+**Error Response:**
 ```json
 {
   "success": false,
   "chat_id": 1,
   "response": "",
   "role": "assistant",
-  "timestamp": "2026-02-16T10:30:00",
+  "timestamp": "2026-07-11T10:30:00",
   "sources_used": null,
   "sources": null,
   "error_message": "Chat not found or access denied"
 }
 ```
 
-#### 8. Get User Chats
+#### 10. Get User Chats
 ```http
 GET /getchat
+Authorization: Bearer <token>
 ```
-**Description**: Retrieve all chat sessions for the authenticated user.
-
-**Authentication**: Required (Bearer Token)
-
-**Response**:
+**Response:**
 ```json
 {
   "chats": [
-    {
-      "chat_id": 1,
-      "chat_name": "document.pdf"
-    },
-    {
-      "chat_id": 2,
-      "chat_name": "report.pdf"
-    }
+    { "chat_id": 1, "chat_name": "document.pdf" },
+    { "chat_id": 2, "chat_name": "report.pdf" }
   ],
   "Successful": true
 }
 ```
 
-#### 9. Get Chat Conversation
+#### 11. Get Chat Conversation
 ```http
 GET /getchatconversation?chatid=1
+Authorization: Bearer <token>
 ```
-**Description**: Retrieve full conversation history for a specific chat.
+Returns all messages in chronological order, including structured metadata for assistant messages.
 
-**Authentication**: Required (Bearer Token)
-
-**Query Parameters**:
-- `chatid` (integer): The chat ID
-
-**Response**:
+**Response:**
 ```json
 {
   "messages": [
+    { "role": "user", "content": "What is the main topic?", "key_points": null, "sources_cited": null, "follow_up_suggestions": null },
     {
-      "role": "user",
-      "content": "What is the main topic?"
-    },
-    {
-      "role": "system",
-      "content": "The main topic is..."
+      "role": "assistant",
+      "content": "The main topic is...",
+      "key_points": ["Key point 1", "Key point 2"],
+      "sources_cited": ["document.pdf - page 3"],
+      "follow_up_suggestions": ["Could you explain more about X?"]
     }
   ],
   "Successful": true
 }
 ```
 
-**Error Response**:
+#### 12. Rename a Chat
+```http
+PATCH /renamechat
+Authorization: Bearer <token>
+```
+**Request Body:**
 ```json
-{
-  "messages": [],
-  "error": "Chat not found or access denied",
-  "Successful": false
-}
+{ "chat_id": 1, "chat_name": "New Chat Name" }
+```
+**Response:**
+```json
+{ "Successful": true, "message": "Chat renamed successfully", "chat_id": 1, "chat_name": "New Chat Name" }
 ```
 
-#### 10. Delete Chat
+#### 13. Delete Chat
 ```http
 DELETE /deletechat?chatid=1
+Authorization: Bearer <token>
 ```
-**Description**: Delete a chat session, including all messages and associated files (PDFs and FAISS indexes).
+Deletes the chat record, all associated `Message` rows, all associated `DocumentChunk` embeddings, and the PDF upload folder (safety check ensures only subfolders of `uploads/` are removed).
 
-**Authentication**: Required (Bearer Token)
-
-**Query Parameters**:
-- `chatid` (integer): The chat ID to delete
-
-**Response**:
+**Response:**
 ```json
-{
-  "Successful": true,
-  "message": "Chat deleted successfully"
-}
+{ "Successful": true, "message": "Chat deleted successfully" }
 ```
 
-**Error Response**:
-```json
-{
-  "Successful": false,
-  "message": "Failed to delete chat"
-}
-```
-
-**Note**: This endpoint performs:
-- Ownership verification (ensures chat belongs to user)
-- Deletion of all messages associated with the chat
-- Deletion of the chat folder (PDFs + FAISS indexes)
-- Deletion of the chat record from database
-- Transaction rollback on errors
-
-### Protected Routes
-
-#### 11. Protected Endpoint (Example)
-```http
-GET /protected
-```
-**Description**: Example of JWT-protected route. Requires valid Bearer token.
-
-**Headers**:
-```
-Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
-```
-
-**Response**:
-```json
-{
-  "user": {
-    "user_id": 1,
-    "user_name": "John Doe",
-    "email": "john@example.com"
-  }
-}
-```
+---
 
 ### System Routes
 
-#### 12. Root Endpoint
+#### 14. Root
 ```http
 GET /
 ```
-Returns API status message.
-
-**Response**:
 ```json
-{
-  "message": "PDF Upload API is running"
-}
+{ "message": "PDF Upload API is running" }
 ```
 
-#### 13. Health Check
+#### 15. Health Check
 ```http
 GET /health
 ```
-Returns service health status.
-
-**Response**:
 ```json
-{
-  "health": "okay"
-}
+{ "health": "okay" }
 ```
 
 ## 🛠️ Technology Stack
 
 ### Core Framework
-- **FastAPI** - Modern, high-performance web framework for building APIs
-- **Uvicorn** - Lightning-fast ASGI server
+- **FastAPI** — modern, high-performance async web framework
+- **Uvicorn** — ASGI server
 
 ### Authentication & Security
-- **PyJWT** - JWT token encoding, decoding, and verification
-- **Bcrypt** - Industry-standard password hashing with salt
-- **Email Validator** - Email format validation
+- **PyJWT** — JWT token encoding, decoding, and verification
+- **Bcrypt** — password hashing with salt
+- **Email Validator** — email format validation
 
-### Database
-- **PostgreSQL** - Relational database for persistent storage
-- **SQLAlchemy** - Powerful SQL toolkit and ORM
-- **asyncpg** - High-performance async PostgreSQL driver
-- **psycopg2-binary** - PostgreSQL adapter for Python
+### Database & Vector Store
+- **PostgreSQL** — relational database and vector store (via pgvector)
+- **pgvector** — PostgreSQL extension for vector similarity search (`<=>` cosine distance)
+- **SQLAlchemy** — SQL toolkit and ORM
+- **psycopg2-binary** — PostgreSQL adapter for Python
 
 ### RAG & AI Components
-- **OpenAI Agents SDK** - Framework for building tool-using AI agents
-- **LangChain Community** - Community integrations and utilities
-- **LangChain Text Splitters** - Document chunking utilities
-- **FAISS (CPU)** - Facebook AI Similarity Search for dual vector store operations
-- **Sentence Transformers** - Text embeddings for semantic search
-- **HuggingFace** - Model hub integration
+- **OpenAI Agents SDK** (`openai-agents`) — framework for tool-using AI agents
+- **LangChain Community** — `PyPDFDirectoryLoader` for PDF loading
+- **LangChain Text Splitters** — `RecursiveCharacterTextSplitter` for chunking
+- **LangChain HuggingFace** — `HuggingFaceEmbeddings` wrapper
+- **Sentence Transformers** — `all-mpnet-base-v2` embedding model (768-dim)
 
 ### Document Processing
-- **PyPDF** - PDF document parsing and text extraction
+- **PyPDF** — PDF parsing and text extraction
 
-### Additional Libraries
-- **Pydantic** - Data validation using Python type hints
-- **Pydantic Settings** - Settings management
-- **Python Multipart** - File upload handling
-- **Python Dotenv** - Environment variable management
-- **CORS Middleware** - Cross-Origin Resource Sharing support
-- **httpx** - Async HTTP client for external API calls (GitHub OAuth)
+### Utilities
+- **Pydantic** — data validation and structured output types
+- **Python Multipart** — file upload handling
+- **Python Dotenv** — environment variable management
+- **HTTPX** — async HTTP client for GitHub OAuth
 
 ## 📦 Key Dependencies
 
-All dependencies are listed in [requirements.txt](requirements.txt). Install them using:
-```bash
-pip install -r requirements.txt
+```
+fastapi
+pydantic
+python-dotenv
+python-multipart
+uvicorn
+langchain-core
+langchain-community
+langchain-text-splitters
+openai-agents
+faiss-cpu          # retained for fas.py (legacy); not used by active routes
+pypdf
+sqlalchemy
+psycopg2-binary
+pyJWT
+bcrypt
+email-validator
+langchain-huggingface
+sentence-transformers
+httpx
 ```
 
-**Core Libraries:**
-- `fastapi` - Modern web framework for building APIs
-- `uvicorn` - ASGI server implementation
-- `pyjwt` - JWT token encoding and decoding
-- `bcrypt` - Password hashing and verification
-- `sqlalchemy` - SQL toolkit and ORM
-- `asyncpg` - Async PostgreSQL driver
-- `psycopg2-binary` - PostgreSQL adapter
-
-**AI & RAG Libraries:**
-- `langchain-core` - LangChain core functionality with output parsers
-- `langchain-community` - Community integrations
-- `langchain-google-genai` - Google Gemini 3 Flash Preview integration
-- `langchain-huggingface` - HuggingFace model integration
-- `sentence_transformers` - Text embeddings for semantic search
-- `langchain-text-splitters` - Text splitting utilities
-- `faiss-cpu` - Dual vector store for documents and chat history
-- `pypdf` - PDF document parsing
-
-**Utilities:**
-- `pydantic` - Data validation using type hints
-- `pydantic-settings` - Settings management
-- `python-dotenv` - Environment variables
-- `python-multipart` - File upload support
-- `email-validator` - Email validation
-- `httpx` - Async HTTP client for OAuth and external APIs
+> **Note**: `faiss-cpu` is still listed because `retriver/fas.py` imports it. That module is not called by any active route and can be removed once legacy code is cleaned up.
 
 ## 🗄️ Database Schema
 
-### Users Table
-- `user_id` (Integer, Primary Key, Auto-increment)
-- `user_name` (String) - User's full name
-- `email` (String) - User's email address (unique)
-- `password` (String, Nullable) - Bcrypt hashed password (null for OAuth users)
-- **Relationships**: One-to-Many with Chat table
+### Users
+| Column | Type | Notes |
+|--------|------|-------|
+| `user_id` | Integer PK | auto-increment |
+| `user_name` | String | display name |
+| `email` | String | unique identifier |
+| `password` | String (nullable) | bcrypt hash; `null` for OAuth users |
 
-**Note**: Users created via GitHub OAuth will have `password` set to null. Email serves as the unique identifier for both traditional and OAuth authentication.
+### Chat
+| Column | Type | Notes |
+|--------|------|-------|
+| `chat_id` | Integer PK | auto-increment |
+| `chat_name` | String | defaults to first PDF filename |
+| `chat_fileloc` | String | path to `uploads/<timestamp>/` batch directory |
+| `user_id` | Integer FK → Users | |
 
-### Chat Table
-- `chat_id` (Integer, Primary Key, Auto-increment)
-- `chat_name` (String) - Chat session name (typically first PDF filename)
-- `chat_fileloc` (String) - File location of the batch directory
-- `user_id` (Integer, Foreign Key to Users table)
-- **Relationships**: 
-  - Many-to-One with Users table
-  - One-to-Many with Message table
+### Message
+| Column | Type | Notes |
+|--------|------|-------|
+| `message_id` | Integer PK | auto-increment |
+| `chat_id` | Integer FK → Chat | |
+| `role` | String | `"user"` or `"assistant"` |
+| `content` | String | main message text |
+| `key_points` | JSON (nullable) | assistant only — list of key bullets |
+| `sources_cited` | JSON (nullable) | assistant only — list of citation strings |
+| `follow_up_suggestions` | JSON (nullable) | assistant only — list of follow-up questions |
 
-### Message Table
-- `message_id` (Integer, Primary Key, Auto-increment)
-- `chat_id` (Integer, Foreign Key to Chat table)
-- `role` (String) - Message role: "user" or "system"
-- `content` (String) - Message content
-- **Relationships**: Many-to-One with Chat table
+### DocumentChunk
+| Column | Type | Notes |
+|--------|------|-------|
+| `id` | Integer PK | auto-increment |
+| `chat_id` | Integer FK → Chat | scopes retrieval to a specific chat |
+| `content` | Text | chunk text (PDF paragraph, user question, or Q&A pair) |
+| `doc_metadata` | JSON (nullable) | `{"source": "file.pdf", "page": 2}` for PDF chunks; `{"source": "user"}` or `{"source": "AI", "question": "..."}` for history |
+| `embedding` | Vector(768) | pgvector 768-dim embedding from `all-mpnet-base-v2` |
+
+> **Three kinds of chunks stored per chat:**
+> - **PDF chunk** — inserted on upload; enables document retrieval.
+> - **User question chunk** — inserted before each LLM call; seeds semantic history.
+> - **Q&A pair chunk** — inserted after each LLM response; lets future questions retrieve past answers.
 
 ## 🔄 Workflow
 
-### System Architecture Diagram
+### System Architecture
 
 ```
 ┌─────────────┐
 │   Client    │
 │  (Browser)  │
 └──────┬──────┘
-       │ HTTP/HTTPS
-       │ JWT Token
+       │ HTTP/HTTPS + JWT Bearer Token
        ▼
 ┌─────────────────────────────────────────┐
-│           FastAPI Backend               │
-│  ┌────────────────────────────────┐    │
-│  │     Authentication Layer        │    │
-│  │  (JWT Verify + Bcrypt)         │    │
-│  └────────────────────────────────┘    │
-│  ┌────────────────────────────────┐    │
-│  │         API Routes              │    │
-│  │  • Auth    • Upload  • Chat    │    │
-│  └────────────────────────────────┘    │
-└──────┬──────────────────┬───────────────┘
-       │                  │
-       ▼                  ▼
-┌──────────────┐   ┌──────────────────┐
-│  PostgreSQL  │   │   File System    │
-│   Database   │   │   (uploads/)     │
-│              │   │                  │
-│  • Users     │   │  • PDFs          │
-│  • Chat      │   │  • FAISS Indexes │
-│  • Messages  │   └──────────────────┘
-└──────────────┘
-       │
-       │ Query Context
-       ▼
-┌────────────────────────────────────────┐
-│        LangChain + RAG System          │
-│  ┌────────────┐    ┌───────────────┐  │
-│  │   FAISS    │◄───│  Google Gen   │  │
-│  │  Retriever │    │  AI Embeddings│  │
-│  └────────────┘    └───────────────┘  │
-│         ▼                              │
-│  ┌────────────────────────────────┐   │
-│  │  Google Generative AI (LLM)    │   │
-│  │  Response Generation           │   │
-│  └────────────────────────────────┘   │
-└────────────────────────────────────────┘
+│              FastAPI Backend            │
+│  ┌──────────────────────────────────┐  │
+│  │   Authentication Layer           │  │
+│  │   (JWT verify + Bcrypt)          │  │
+│  └──────────────────────────────────┘  │
+│  ┌──────────────────────────────────┐  │
+│  │   API Routers                    │  │
+│  │   Auth | Upload | Chat           │  │
+│  └──────────────────────────────────┘  │
+└────────┬────────────────┬──────────────┘
+         │                │
+         ▼                ▼
+┌────────────────┐  ┌─────────────────────────────┐
+│  PostgreSQL    │  │   File System (uploads/)     │
+│                │  │                              │
+│  • Users       │  │  uploads/<timestamp>/        │
+│  • Chat        │  │    └── *.pdf                 │
+│  • Message     │  └─────────────────────────────┘
+│  • DocumentChunk│
+│    (pgvector)  │
+└────────┬───────┘
+         │ cosine similarity retrieval
+         ▼
+┌────────────────────────────────────────────────┐
+│           OpenAI Agents SDK (RAG Agent)        │
+│                                                │
+│  Tools:                                        │
+│  ┌──────────────────────────────────────────┐ │
+│  │ search_knowledge_base → pgvector query   │ │
+│  │ search_chat_history   → Message table    │ │
+│  │ generate_citation     → citation format  │ │
+│  │ WebSearchTool         → live web search  │ │
+│  └──────────────────────────────────────────┘ │
+│                                                │
+│  Model: gpt-4o-mini (OpenAI)                  │
+│  Output type: LLMResponseFormat (Pydantic)    │
+└────────────────────────────────────────────────┘
 ```
 
-### Workflow
+### Step-by-Step Workflow
 
 1. **User Registration & Authentication**
-   - User creates account via `/signup` endpoint with email and password
-   - Password is hashed with bcrypt before storage
-   - User logs in via `/login` and receives JWT token (24-hour expiration)
+   - Register via `/signup` (email + password, bcrypt hashed) or via GitHub OAuth (`/githublogin`)
+   - Login via `/login` to receive a 24-hour JWT token
 
 2. **PDF Upload & Processing**
-   - User uploads PDF files via `/upload-pdfs` endpoint (requires JWT token)
-   - PDFs are saved in timestamped batch directories (e.g., `uploads/20260216_143052/`)
-   - New Chat record is created in database with first PDF filename as chat name
-   - Documents are split into chunks for processing
+   - Upload PDFs via `POST /upload-pdfs` (requires JWT)
+   - Files saved in `uploads/<YYYYMMDD_HHMMSS>/`
+   - A `Chat` record is created; documents are split into chunks
+   - Each chunk is embedded with `all-mpnet-base-v2` and inserted as a `DocumentChunk` row in PostgreSQL
 
-3. **Vector Embedding & Storage (Dual Vector Store System)**
-   - Document chunks are processed with RecursiveCharacterTextSplitter (chunk_size=500, chunk_overlap=300)
-   - Embeddings generated using HuggingFace `sentence-transformers/all-mpnet-base-v2` model
-   - **Document Vector Store**: FAISS index created for PDF content in batch's `faiss_index_doc` subdirectory
-   - **Chat History Vector Store**: Separate FAISS index in `faiss_index_chat` subdirectory for storing past Q&A pairs
-   - Both vector stores enable semantic similarity search
-   - Each chat has isolated vector stores in its timestamped directory
+3. **Chat Session Management**
+   - List sessions via `GET /getchat`
+   - Rename sessions via `PATCH /renamechat`
+   - Delete sessions via `DELETE /deletechat` (cascades to messages, embeddings, and PDF files)
+   - List or download PDFs via `GET /pdf` and `GET /pdf/download`
 
-4. **Chat Session Management**
-   - User retrieves their chat sessions via `/getchat` endpoint
-   - Each chat is linked to a specific batch of uploaded PDFs
-   - Full conversation history is maintained in both PostgreSQL and vector store
-   - Users can delete chats via `/deletechat` endpoint (removes files, indexes, and database records)
+4. **Question & Answer Flow**
+   - User sends `POST /chat` with `chat_id`, `question`, and optional `chat_history`
+   - **Ownership check**: verifies the chat belongs to the authenticated user
+   - **User message stored** in `Message` table; question embedded and stored as `DocumentChunk`
+   - **RAG Agent runs**:
+     1. `search_knowledge_base` — cosine search over `document_chunk` (top-5)
+     2. `search_chat_history` — last 10 `Message` rows
+     3. `generate_citation` — for any referenced content
+     4. `WebSearchTool` — if information is missing from uploaded docs
+   - **Structured response** (`LLMResponseFormat`) returned by the agent
+   - **Assistant message stored** with `key_points`, `sources_cited`, `follow_up_suggestions`
+   - **Q&A pair embedded** and inserted as a `DocumentChunk` for future retrieval
+   - **Source citations built** from top-4 nearest `DocumentChunk` rows (pgvector cosine distance)
 
-5. **Question & Answer Flow (Enhanced with Structured Output)**
-   - User sends questions via `/chat` endpoint with chat_id and chat_history (requires JWT token)
-   - **Security Check**: System verifies the chat belongs to authenticated user
-   - **Message Storage**: User's question stored in Message table (role="user")
-   - **Dual Retrieval**:
-     - Retrieves top 20 relevant document chunks from document vector store
-     - Retrieves top 20 relevant past conversations from chat history vector store
-   - **Structured Generation**: Google Gemini 3 Flash Preview generates response with Pydantic output parser
-   - **LLM Response Structure**:
-     - `answer`: Main response text
-     - `key_points`: List of important points
-     - `confidence_level`: "high", "medium", or "low"
-     - `sources_cited`: List of source references
-     - `needs_clarification`: Boolean flag
-     - `clarification_needed`: Optional clarification request
-     - `follow_up_suggestions`: List of suggested follow-up questions
-   - **Response Storage**: System's answer stored in Message table (role="assistant")
-   - **Chat History Update**: Q&A pair added to chat history vector store for future semantic retrieval
-   - **Response**: Full structured JSON returned to user with timestamp and metadata
-
-6. **Conversation History**
-   - User can retrieve full conversation history via `/getchatconversation` endpoint
-   - History includes all user questions and system responses
-   - Conversations persist across sessions in PostgreSQL
-   - Past conversations are semantically searchable via chat history vector store
-
-7. **Chat Deletion**
-   - User can delete unwanted chats via `/deletechat` endpoint (requires JWT token)
-   - **Comprehensive Cleanup**: 
-     - Deletes all messages associated with the chat
-     - Removes entire batch folder (PDFs + FAISS indexes)
-     - Deletes chat record from database
-   - **Safety Checks**: Ownership verification and path validation
-   - **Transactional**: Automatic rollback on errors
-
-1. **User Registration & Authentication**
-   - User creates account via `/signup` endpoint with email and password
-   - Password is hashed with bcrypt before storage
-   - User logs in via `/login` and receives JWT token (24-hour expiration)
-
-2. **PDF Upload & Processing**
-   - User uploads PDF files via `/upload-pdfs` endpoint (requires JWT token)
-   - PDFs are saved in timestamped batch directories (e.g., `uploads/20260216_143052/`)
-   - New Chat record is created in database with first PDF filename as chat name
-   - Documents are split into chunks for processing
-
-3. **Vector Embedding & Storage (Dual Vector Store System)**
-   - Document chunks are processed with RecursiveCharacterTextSplitter (chunk_size=500, chunk_overlap=300)
-   - Embeddings generated using HuggingFace `sentence-transformers/all-mpnet-base-v2` model
-   - **Document Vector Store**: FAISS index created for PDF content in batch's `faiss_index_doc` subdirectory
-   - **Chat History Vector Store**: Separate FAISS index in `faiss_index_chat` subdirectory for storing past Q&A pairs
-   - Both vector stores enable semantic similarity search
-   - Each chat has isolated vector stores in its timestamped directory
-
-4. **Chat Session Management**
-   - User retrieves their chat sessions via `/getchat` endpoint
-   - Each chat is linked to a specific batch of uploaded PDFs
-   - Full conversation history is maintained in both PostgreSQL and vector store
-
-5. **Question & Answer Flow (Enhanced with Structured Output)**
-   - User sends questions via `/chat` endpoint with chat_id and chat_history (requires JWT token)
-   - **Security Check**: System verifies the chat belongs to authenticated user
-   - **Message Storage**: User's question stored in Message table (role="user")
-   - **Dual Retrieval**:
-     - Retrieves top 20 relevant document chunks from document vector store
-     - Retrieves top 20 relevant past conversations from chat history vector store
-   - **Structured Generation**: Google Gemini 3 Flash Preview generates response with Pydantic output parser
-   - **LLM Response Structure**:
-     - `answer`: Main response text
-     - `key_points`: List of important points
-     - `confidence_level`: "high", "medium", or "low"
-     - `sources_cited`: List of source references
-     - `needs_clarification`: Boolean flag
-     - `clarification_needed`: Optional clarification request
-     - `follow_up_suggestions`: List of suggested follow-up questions
-   - **Response Storage**: System's answer stored in Message table (role="assistant")
-   - **Chat History Update**: Q&A pair added to chat history vector store for future semantic retrieval
-   - **Response**: Full structured JSON returned to user with timestamp and metadata
-
-6. **Conversation History**
-   - User can retrieve full conversation history via `/getchatconversation` endpoint
-   - History includes all user questions and system responses
-   - Conversations persist across sessions in PostgreSQL
-   - Past conversations are semantically searchable via chat history vector store
-
-## 🔒 Security Features & Notes
-
-### Implemented Security Features
-- ✅ **Password Hashing**: Passwords are hashed using bcrypt with salt before storage (never stored in plain text)
-- ✅ **JWT Authentication**: Secure token-based authentication with 24-hour expiration
-- ✅ **OAuth 2.0**: GitHub OAuth integration for secure social login
-- ✅ **Protected Routes**: Middleware validates JWT tokens on all protected endpoints
-- ✅ **User Authorization**: Chat ownership verification prevents unauthorized access to other users' chats
-- ✅ **Database Transactions**: Automatic rollback support on errors to maintain data integrity
-- ✅ **Email Validation**: Prevents duplicate user registration and validates email format
-- ✅ **Query Parameter Validation**: Pydantic models ensure proper data types and prevent injection attacks
-- ✅ **SQLAlchemy ORM**: Protection against SQL injection attacks
-- ✅ **Type Safety**: Pydantic models enforce type checking on all API requests/responses
-
-### GitHub OAuth Setup (Optional)
-
-To enable GitHub OAuth authentication:
-
-1. **Create GitHub OAuth App:**
-   - Go to [GitHub Developer Settings](https://github.com/settings/developers)
-   - Click "New OAuth App"
-   - Fill in application details:
-     - **Application name**: Your App Name
-     - **Homepage URL**: `http://localhost:8000` (or your production URL)
-     - **Authorization callback URL**: `http://localhost:8000/github/callback`
-   - Click "Register application"
-   - Copy the **Client ID**
-   - Generate a **Client Secret** and copy it
-
-2. **Configure Environment Variables:**
-   Add to your `.env` file:
-   ```env
-   CLIENT_ID=your_github_client_id_here
-   CLIENT_SECRET=your_github_client_secret_here
-   REDIRECT_URI=http://localhost:8000/github/callback
-   FRONTEND_URL=http://localhost:5173
-   ```
-
-3. **Production Setup:**
-   - Update the callback URL to your production domain
-   - Keep `CLIENT_SECRET` secure and never commit it
-   - Update `FRONTEND_URL` to your production frontend URL
-
-**Security Notes:**
-- GitHub OAuth tokens are exchanged server-side only
-- User emails are verified from GitHub (primary and verified emails prioritized)
-- Users created via OAuth don't have passwords (OAuth only)
-- Email addresses link OAuth and traditional auth (same email = same user)
-
-### Production Security Checklist
-
-⚠️ **Critical - Must Change:**
-- [ ] **JWT_SECRET**: Replace with a strong, randomly generated secret key (minimum 32 characters)
-  ```bash
-  # Generate secure secret key
-  python -c "import secrets; print(secrets.token_urlsafe(32))"
-  ```
-- [ ] **Database Credentials**: Change default PostgreSQL password
-- [ ] **CORS Origins**: Restrict `allow_origins` from `["*"]` to specific frontend domains in [main.py](main.py)
-  ```python
-  allow_origins=["https://yourdomain.com", "https://app.yourdomain.com"]
-  ```
-
-🔒 **Recommended Security Enhancements:**
-- [ ] **HTTPS**: Deploy with SSL/TLS certificates (use Let's Encrypt for free certificates)
-- [ ] **Rate Limiting**: Implement rate limiting on authentication and upload endpoints
-- [ ] **File Upload Validation**: 
-  - Validate file MIME types (ensure only PDFs are accepted)
-  - Set maximum file size limits (e.g., 10MB per file)
-  - Scan uploaded files for malware
-- [ ] **Token Refresh**: Implement refresh tokens for better user experience
-- [ ] **Password Policy**: Enforce strong password requirements:
-  - Minimum length (8-12 characters)
-  - Complexity requirements (uppercase, lowercase, numbers, special characters)
-  - Password strength meter on frontend
-- [ ] **Logging & Monitoring**: 
-  - Log authentication attempts (successful and failed)
-  - Monitor for suspicious activity
-  - Implement alerting for security events
-- [ ] **Environment Variables**: Use secret management service (AWS Secrets Manager, HashiCorp Vault)
-- [ ] **API Versioning**: Implement API versioning (e.g., `/api/v1/`)
-- [ ] **Request Validation**: Add comprehensive input validation and sanitization
-- [ ] **Path Traversal Protection**: Validate all file paths (already using timestamped directories)
-- [ ] **Session Management**: Consider session timeout and concurrent session limits
-- [ ] **Audit Trail**: Log all data modifications (who, what, when)
-
-## 🐳 Docker Support
-
-A Dockerfile is included for containerized deployment.
-
-### Building the Docker Image
-```bash
-docker build -t rag-backend:latest .
-```
-
-### Running with Docker
-```bash
-docker run -d \
-  -p 8000:8000 \
-  -e JWT_SECRET="your-jwt-secret" \
-  -e GOOGLE_API_KEY="your-google-api-key" \
-  -e DATABASE_URI="postgresql://user:password@host:5432/database" \
-  --name rag-backend \
-  rag-backend:latest
-```
-
-### Docker Compose (Recommended)
-
-For a complete setup with PostgreSQL, create a `docker-compose.yml`:
-```yaml
-version: '3.8'
-services:
-  postgres:
-    image: postgres:15
-    environment:
-      POSTGRES_DB: rag_database
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: password
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    ports:
-      - "5432:5432"
-  
-  backend:
-    build: .
-    ports:
-      - "8000:8000"
-    environment:
-      - DATABASE_URI=postgresql://postgres:password@postgres:5432/rag_database
-      - JWT_SECRET=${JWT_SECRET}
-      - GOOGLE_API_KEY=${GOOGLE_API_KEY}
-    depends_on:
-      - postgres
-    volumes:
-      - ./uploads:/app/uploads
-
-volumes:
-  postgres_data:
-```
-
-Run with:
-```bash
-docker-compose up -d
-```
+5. **Conversation History**
+   - Retrieve full history via `GET /getchatconversation`
+   - Includes structured metadata (key_points, sources_cited, follow_up_suggestions) for all assistant messages
 
 ## 🔐 Authentication Flow
 
@@ -1232,447 +874,142 @@ sequenceDiagram
     Frontend-->>User: Logged in successfully
 ```
 
-### Flow Steps
+## 🔒 Security Features & Notes
 
-**Traditional Auth:**
-1. **Signup**: User registers with email, username, and password
-2. **Password Hashing**: Password is hashed with bcrypt and salt before database storage
-3. **Login**: User authenticates with email and password
-4. **Credential Validation**: System verifies hashed password matches
-5. **Token Generation**: JWT token is created with 24-hour expiration
-6. **Token Storage**: Client stores token (localStorage/sessionStorage)
-7. **Authenticated Requests**: Client includes token in Authorization header: `Bearer <token>`
-8. **Token Verification**: Protected routes validate JWT signature and expiration
-9. **User Extraction**: User information is extracted from valid token
-10. **Authorization Check**: Chat routes verify the resource belongs to the authenticated user
-11. **Error Handling**: Invalid/expired tokens return 401, unauthorized access returns error message
+- **JWT**: HS256-signed tokens with 24-hour expiration
+- **Password hashing**: bcrypt with automatic salt
+- **Chat ownership**: every chat endpoint verifies `Chat.user_id == current_user.user_id`
+- **Path traversal prevention**: `GET /pdf/download` strips the filename to its basename before constructing the file path
+- **Upload folder safety**: `DELETE /deletechat` only removes subfolders inside `uploads/`, never the root upload directory
+- **CORS**: currently set to `*` — restrict to your frontend origin in production
+- **`.env`**: never committed; listed in `.gitignore`
 
-**GitHub OAuth:**
-1. **Initiate**: User clicks "Login with GitHub" → redirects to `/githublogin`
-2. **GitHub Authorization**: User is redirected to GitHub to authorize the app
-3. **Callback**: GitHub redirects back with authorization code
-4. **Token Exchange**: Backend exchanges code for GitHub access token
-5. **Profile Fetch**: Backend retrieves user profile from GitHub API
-6. **Email Retrieval**: If email is private, fetches from `/user/emails` endpoint
-7. **User Creation/Login**: Creates new user or finds existing user by email
-8. **JWT Generation**: Generates JWT token for the user
-9. **Frontend Redirect**: Redirects to frontend with JWT token and user data as query params
-10. **Token Storage**: Frontend stores token and user data
-11. **Authenticated Session**: User can now access protected routes with the JWT token
-## 💡 Usage Example
+## 🐳 Docker Support
 
-### Traditional Authentication Flow
+### Dockerfile
+
+The `Dockerfile` uses `python:3.11-slim` and installs dependencies via `requirements.txt`.
 
 ```bash
-# 1. Sign up a new user
+docker build -t rag-backend .
+docker run -p 8000:8000 \
+  -e JWT_SECRET=your-secret \
+  -e OPENAI_API_KEY=sk-proj-... \
+  -e DATABASE_URI=postgresql://postgres:password@host:5432/rag_database \
+  rag-backend
+```
+
+### Docker Compose
+
+`docker-compose.yml` starts both the API and a PostgreSQL instance together:
+
+```bash
+docker compose up --build
+```
+
+> After starting, enable the pgvector extension in the PostgreSQL container:
+> ```bash
+> docker exec -it <db_container_name> psql -U postgres -d rag_database -c "CREATE EXTENSION IF NOT EXISTS vector;"
+> ```
+
+## 💡 Usage Example
+
+### Full end-to-end flow with `curl`
+
+```bash
+# 1. Sign up
 curl -X POST http://localhost:8000/signup \
   -H "Content-Type: application/json" \
-  -d '{
-    "user_name": "John Doe",
-    "email": "john@example.com",
-    "password": "securePassword123"
-  }'
+  -d '{"user_name":"Alice","email":"alice@example.com","password":"Secret123"}'
 
-# 2. Login to get JWT token
-curl -X POST http://localhost:8000/login \
+# 2. Login and capture the token
+TOKEN=$(curl -s -X POST http://localhost:8000/login \
   -H "Content-Type: application/json" \
-  -d '{
-    "email": "john@example.com",
-    "password": "securePassword123"
-  }'
+  -d '{"email":"alice@example.com","password":"Secret123"}' \
+  | python -c "import sys,json; print(json.load(sys.stdin)['User']['token'])")
 
-# Response: { "User": { ..., "token": "eyJhbG..." }, ... }
+# 3. Upload a PDF and capture the chat_id
+CHAT_ID=$(curl -s -X POST http://localhost:8000/upload-pdfs \
+  -H "Authorization: Bearer $TOKEN" \
+  -F "files=@lecture.pdf" \
+  | python -c "import sys,json; print(json.load(sys.stdin)['chat_id'])")
 
-# 3. Use token to access protected routes
-curl -X GET http://localhost:8000/getuserdata \
-  -H "Authorization: Bearer eyJhbG..."
-```
-
-### GitHub OAuth Flow
-
-**For GitHub OAuth, the flow must be initiated in a browser:**
-
-1. **Navigate to:** `http://localhost:8000/githublogin`
-2. **Authorize on GitHub:** User is redirected to GitHub to authorize the app
-3. **Automatic redirect:** After authorization, GitHub redirects back to your backend
-4. **Backend processes:** Creates/finds user and generates JWT token
-5. **Frontend receives:** Redirected to frontend with token in URL:
-   ```
-   http://localhost:5173/auth/github/callback?token=eyJhbG...&user_id=5&user_name=johndoe&email=john@example.com
-   ```
-6. **Frontend code** should extract and store the token:
-   ```javascript
-   const urlParams = new URLSearchParams(window.location.search);
-   const token = urlParams.get('token');
-   const userId = urlParams.get('user_id');
-   localStorage.setItem('authToken', token);
-   localStorage.setItem('userId', userId);
-   ```
-
-### Working with Protected Endpoints
-
-# 4. Upload PDFs (protected - requires token)
-curl -X POST http://localhost:8000/upload-pdfs \
-  -H "Authorization: Bearer eyJhbG..." \
-  -F "files=@document1.pdf" \
-  -F "files=@document2.pdf"
-
-# Response: { "message": "Successfully uploaded 2 file(s)", "chat_id": 1, ... }
-
-# 5. Get all user chat sessions
-curl -X GET http://localhost:8000/getchat \
-  -H "Authorization: Bearer eyJhbG..."
-
-# Response: { "chats": [{"chat_id": 1, "chat_name": "document1.pdf"}], "Successful": true }
-
-# 6. Chat with documents
+# 4. Ask a question
 curl -X POST http://localhost:8000/chat \
+  -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer eyJhbG..." \
-  -d '{
-    "chat_id": 1,
-    "question": "What is the main topic?"
-  }'
+  -d "{\"chat_id\": $CHAT_ID, \"question\": \"What are the main topics?\", \"chat_history\": []}"
 
-# Response: { "response": "The main topic is...", "Successful": true }
+# 5. List PDFs in the chat
+curl "http://localhost:8000/pdf?chatid=$CHAT_ID" \
+  -H "Authorization: Bearer $TOKEN"
 
-# 7. Get conversation history
-curl -X GET "http://localhost:8000/getchatconversation?chatid=1" \
-  -H "Authorization: Bearer eyJhbG..."
+# 6. Rename the chat
+curl -X PATCH http://localhost:8000/renamechat \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d "{\"chat_id\": $CHAT_ID, \"chat_name\": \"Lecture Notes\"}"
 
-# Response: { "messages": [{"role": "user", "content": "..."}, {"role": "system", "content": "..."}], "Successful": true }
-
-# 8. Delete a chat session
-curl -X DELETE "http://localhost:8000/deletechat?chatid=1" \
-  -H "Authorization: Bearer eyJhbG..."
-
-# Response: { "Successful": true, "message": "Chat deleted successfully" }
+# 7. Delete the chat
+curl -X DELETE "http://localhost:8000/deletechat?chatid=$CHAT_ID" \
+  -H "Authorization: Bearer $TOKEN"
 ```
 
-## 🛠️ Troubleshooting
+## 🔧 Troubleshooting
 
-### Common Issues
+### pgvector extension not found
+```
+sqlalchemy.exc.ProgrammingError: type "vector" does not exist
+```
+Run `CREATE EXTENSION IF NOT EXISTS vector;` in your PostgreSQL database before starting the app.
 
-#### 1. Database Connection Error
-```
-sqlalchemy.exc.OperationalError: could not connect to server
-```
-**Solution:**
-- Ensure PostgreSQL service is running
-- Verify database credentials in [db/database.py](db/database.py)
-- Check if database `rag_database` exists:
-  ```bash
-  psql -U postgres -c "CREATE DATABASE rag_database;"
-  ```
+### OpenAI API errors
+- Verify `OPENAI_API_KEY` is set and valid
+- The agent uses `gpt-4o-mini` by default; set `OPENAI_MODEL` in `.env` to change it
+- Check your OpenAI usage limits / billing
 
-#### 2. JWT Token Errors (401 Unauthorized)
-```json
-{"detail": "Invalid token"}
-```
-**Solution:**
-- Ensure `.env` file exists with `JWT_SECRET`
-- Check token format: `Authorization: Bearer <token>`
-- Token may be expired (24-hour lifetime)
-- Re-login to get a fresh token
+### Embedding model download slow on first run
+`sentence-transformers/all-mpnet-base-v2` (~420 MB) is downloaded from HuggingFace Hub on first use. Subsequent runs use the local cache.
 
-#### 3. Google API Key Error
-```
-Error: GOOGLE_API_KEY not found
-```
-**Solution:**
-- Add `GOOGLE_API_KEY` to `.env` file
-- Get API key from [Google AI Studio](https://makersuite.google.com/app/apikey)
-- Restart the application after adding the key
+### Upload fails with vector store error
+If `add_vector_to_db` fails, the database transaction is rolled back and `chat_id` in the response will be `null`. Check server logs for the specific error (common causes: pgvector not installed, PDF with no extractable text, embedding model not loaded).
 
-#### 4. FAISS Index Error
-```
-Failed to load FAISS index
-```
-**Solution:**
-- Delete corrupted index: `uploads/<batch_name>/faiss_index/`
-- Re-upload PDFs to recreate the index
-- Ensure sufficient disk space for vector storage
-
-#### 5. PDF Upload Fails
-```json
-{"message": "Files uploaded but vector store update failed"}
-```
-**Solution:**
-- Check PDF file is not corrupted
-- Ensure PDF contains extractable text (not scanned images only)
-- Verify GOOGLE_API_KEY is valid and has quota remaining
-- Check disk space in `uploads/` directory
-
-#### 6. Module Import Errors
-```
-ModuleNotFoundError: No module named 'xyz'
-```
-**Solution:**
-- Ensure virtual environment is activated
-- Reinstall dependencies: `pip install -r requirements.txt`
-- Check Python version is 3.13+
-
-#### 7. Port Already in Use
-```
-ERROR: [Errno 10048] error while attempting to bind on address
-```
-**Solution:**
-- Change port: `uvicorn main:app --port 8001`
-- Or kill existing process on Windows:
-  ```powershell
-  netstat -ano | findstr :8000
-  taskkill /PID <PID> /F
-  ```
-
-### Debug Mode
-
-Enable detailed logging by adding to [main.py](main.py):
+### CORS errors in browser
+Add your frontend origin to `allow_origins` in `main.py`:
 ```python
-import logging
-logging.basicConfig(level=logging.DEBUG)
+allow_origins=["http://localhost:5173", "https://your-app.vercel.app"]
 ```
-
-### Getting Help
-
-- Check the Issues section on your Git repository
-- Review [FastAPI documentation](https://fastapi.tiangolo.com/)
-- Review [LangChain documentation](https://python.langchain.com/)
-
----
-
-## ⚡ Performance Considerations
-
-### Optimization Tips
-
-1. **Database Connection Pooling**
-   - SQLAlchemy automatically manages connection pools
-   - Adjust pool size for high-traffic scenarios in [db/database.py](db/database.py)
-
-2. **FAISS Index Optimization**
-   - FAISS CPU version is used (suitable for moderate scale)
-   - For large datasets, consider FAISS GPU version
-   - Dual vector store system: one for documents (faiss_index_doc), one for chat history (faiss_index_chat)
-   - Index loading is per-chat (memory efficient)
-   - Embedding model: HuggingFace `sentence-transformers/all-mpnet-base-v2`
-   - Top-k retrieval: 20 results from each vector store
-
-3. **Document Chunking**
-   - Current configuration: chunk_size=500, chunk_overlap=300 (RecursiveCharacterTextSplitter)
-   - Chunk size affects retrieval quality and speed
-   - Adjust in [retriver/fas.py](retriver/fas.py) if needed
-   - Smaller chunks = more precise, larger chunks = more context
-   - Overlap ensures context continuity across chunks
-
-4. **API Rate Limiting**
-   - Implement rate limiting for production to prevent abuse
-   - Recommended: 100 requests/minute per user
-
-5. **Caching**
-   - Consider caching frequently accessed chat conversations
-   - Redis integration for session management
-   - Cache FAISS indexes in memory for active chats
-
-6. **Async Operations**
-   - FastAPI runs on ASGI (async support)
-   - Database operations use async driver (asyncpg)
-   - Consider async file operations for large uploads
-
-### Scalability
-
-- **Horizontal Scaling**: Deploy multiple instances behind load balancer
-- **Database**: PostgreSQL supports read replicas
-- **Storage**: Use object storage (S3, Azure Blob) for production file storage
-- **Vector Store**: Consider managed solutions like Pinecone or Weaviate for scale
-
----
 
 ## ❓ Frequently Asked Questions (FAQ)
 
-### General Questions
+**Q: Does this support non-PDF documents?**
+A: Not currently. Only `.pdf` files are accepted by the upload route.
 
-**Q: What types of documents are supported?**  
-A: Currently, only PDF documents are supported. The system extracts text from PDFs using PyPDF library.
+**Q: Where are embeddings stored?**
+A: All embeddings are stored in the `document_chunk` table in PostgreSQL using the pgvector `Vector(768)` column type. There are no FAISS index files written to disk by active routes.
 
-**Q: Can I upload scanned PDFs?**  
-A: The system works best with PDFs containing extractable text. Scanned PDFs (images) may not work unless they have been OCR-processed.
+**Q: Can I use a different OpenAI model?**
+A: Yes — set `OPENAI_MODEL=gpt-4o` (or any supported model) in your `.env`.
 
-**Q: How many files can I upload at once?**  
-A: Multiple files can be uploaded in a single batch. Consider implementing file size limits in production.
+**Q: Can I use a different embedding model?**
+A: Yes, but you must also update the vector dimension. Change the model in `retriver/embedding.py` and update `Vector(768)` in `db/data_models.py` to match the new model's output size. Existing embeddings in the database will be incompatible and must be regenerated.
 
-**Q: How accurate are the responses?**  
-A: Accuracy depends on document quality, question clarity, and LLM capabilities. The system uses retrieval to ground responses in your documents.
+**Q: What is `retriver/fas.py` for?**
+A: It is legacy code from the previous FAISS-based vector store implementation. It is not called by any active route and can be removed once you no longer need it.
 
-### Authentication & Security
-
-**Q: How long do JWT tokens last?**  
-A: JWT tokens expire after 24 hours. Users need to re-login after expiration.
-
-**Q: Can I implement token refresh?**  
-A: Yes, you can extend the system to support refresh tokens for better UX. See security recommendations.
-
-**Q: Is my data secure?**  
-A: Passwords are hashed with bcrypt, and JWT tokens are signed. For production, use HTTPS and follow security checklist.
-
-### Technical Questions
-
-**Q: Which LLM model is used?**  
-A: Google Gemini 3 Flash Preview (`gemini-3-flash-preview`) is used for response generation, with Google Generative AI for embeddings. The system uses Pydantic output parser for structured responses.
-
-**Q: Can I use a different LLM?**  
-A: Yes, LangChain supports multiple LLM providers. Modify [llm/chatmodel.py](llm/chatmodel.py) to use OpenAI, Anthropic, etc.
-
-**Q: How is conversation context maintained?**  
-A: Conversations are maintained through a dual storage system:
-- **PostgreSQL**: All messages stored in Message table with role (user/assistant) and content
-- **FAISS Vector Store**: Past Q&A pairs are embedded and stored for semantic retrieval
-- When asking new questions, the system retrieves both relevant document chunks (top 20) and relevant past conversations (top 20) to provide comprehensive context
-- Chat history is passed in requests and used for contextual understanding
-
-**Q: Can I delete uploaded documents?**  
-A: Yes! The `/deletechat` endpoint allows you to delete a chat session along with all associated files (PDFs and FAISS indexes) and conversation history. The system ensures proper ownership verification before deletion.
-
-**Q: What happens if PDF upload fails?**  
-A: Files are uploaded first, then processed. If vector store creation fails, files remain but chat is not created. Error message is returned.
-
-### Deployment
-
-**Q: How do I deploy to production?**  
-A: Use Docker for containerization, deploy to cloud platforms (AWS, GCP, Azure), use Kubernetes for orchestration. See Docker section.
-
-**Q: What are the system requirements?**  
-A: Minimum: 2GB RAM, 2 CPU cores, 10GB disk. Recommended: 4GB+ RAM, 4+ cores, SSD storage.
-
-**Q: Can I use SQLite instead of PostgreSQL?**  
-A: Yes, but PostgreSQL is recommended for production. Change DATABASE_URI in [db/database.py](db/database.py).
-
----
-
-## 🗺️ Roadmap & Future Enhancements
-
-### Planned Features
-
-- [ ] **Document Management**
-  - ~~Delete uploaded documents and associated chats~~ ✅ Implemented
-  - Update/replace documents in existing chats
-  - Support for more document formats (Word, TXT, Markdown)
-  - Batch document upload optimization
-  
-- [ ] **Enhanced Security**
-  - Refresh token implementation
-  - Rate limiting middleware
-  - API key authentication option
-  - 2FA (Two-Factor Authentication)
-  
-- [ ] **User Experience**
-  - Pagination for chat history
-  - Search within chats
-  - Favorite/pin important chats
-  - Export conversation history
-  
-- [ ] **AI Capabilities**
-  - Support for multiple LLM providers (OpenAI, Anthropic, etc.)
-  - Custom system prompts per chat
-  - Streaming responses for real-time feedback
-  - Document summarization endpoint
-  
-- [ ] **Analytics & Monitoring**
-  - Dashboard for usage statistics
-  - Query performance metrics
-  - Cost tracking for API calls
-  - Logging and audit trails
-  
-- [ ] **Collaboration**
-  - Share chats with other users
-  - Team workspaces
-  - Role-based access control (RBAC)
-  
-- [ ] **Infrastructure**
-  - Redis caching for improved performance
-  - Background task queue (Celery)
-  - Webhook support for notifications
-  - GraphQL API option
-
-### Contributing Ideas
-
-Have an idea? [Open an issue](../../issues) or submit a pull request!
-
----
-
-## 📊 Project Statistics
-
-- **Language**: Python 3.13
-- **Framework**: FastAPI with async support
-- **Database**: PostgreSQL with SQLAlchemy ORM
-- **AI Model**: Google Gemini 3 Flash Preview (`gemini-3-flash-preview`)
-- **Embeddings**: Google Generative AI + HuggingFace Sentence Transformers
-- **Vector Store**: Dual FAISS system (documents + chat history)
-- **Output Format**: Structured with Pydantic parser
-- **Architecture**: Modular (Routers, Models, Utils, DB)
-- **Security**: JWT + Bcrypt
-- **API Style**: RESTful with OpenAPI documentation
-
----
-
-## 📝 License
-
-See LICENSE file for details.
+**Q: How is conversation context passed to the agent?**
+A: The `/chat` request accepts a `chat_history` list that is formatted into the agent's input string. The agent also calls `search_chat_history` to fetch the last 10 messages from the database, providing two layers of context.
 
 ## 🤝 Contributing
 
-Contributions are welcome! Please:
 1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
+2. Create a feature branch (`git checkout -b feature/your-feature`)
+3. Commit your changes (`git commit -m "Add your feature"`)
+4. Push to the branch (`git push origin feature/your-feature`)
 5. Open a Pull Request
 
-Please ensure code quality, add appropriate tests, and follow the existing code style.
+Please follow existing code style and add docstrings for new functions.
 
----
+## 📄 License
 
-**Note**: This is a production-ready authentication system with JWT tokens and bcrypt password hashing. 
-
-**For Production Deployment:**
-- ✅ Replace `JWT_SECRET` with a strong random key
-- ✅ Obtain Google Generative AI API key
-- ✅ Restrict CORS origins to your frontend domain(s)
-- ✅ Use HTTPS with SSL/TLS certificates
-- ✅ Change default database credentials
-- ✅ Implement rate limiting
-- ✅ Set up monitoring and logging
-- ✅ Regular security audits and dependency updates
-- ✅ Back up your database regularly
-- ✅ Use environment variable management service
-
-**Interactive API Documentation:**
-- Swagger UI: `http://127.0.0.1:8000/docs`
-- ReDoc: `http://127.0.0.1:8000/redoc`
-
----
-
-## 🙏 Acknowledgments
-
-This project is built with amazing open-source technologies:
-- [FastAPI](https://fastapi.tiangolo.com/) - Modern web framework
-- [LangChain](https://python.langchain.com/) - LLM application framework
-- [FAISS](https://github.com/facebookresearch/faiss) - Vector similarity search by Meta AI
-- [PostgreSQL](https://www.postgresql.org/) - Advanced open-source database
-- [SQLAlchemy](https://www.sqlalchemy.org/) - Python SQL toolkit and ORM
-- [Google Generative AI](https://ai.google.dev/) - AI embeddings and LLM
-- [Pydantic](https://docs.pydantic.dev/) - Data validation library
-
-Special thanks to the open-source community for making projects like this possible!
-
----
-
-## 📧 Support & Contact
-
-- **Issues**: Report bugs or request features via [GitHub Issues](../../issues)
-- **Discussions**: Join conversations in [GitHub Discussions](../../discussions)
-- **Documentation**: Check [Wiki](../../wiki) for additional guides
-
----
-
-**Made with ❤️ using FastAPI, LangChain, and Python**
-
-*Last Updated: February 16, 2026*
+This project is licensed under the MIT License — see [LICENSE](LICENSE) for details.
