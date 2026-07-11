@@ -7,8 +7,9 @@ from models.pymodel import userdataforapi
 from utils.protectroute import get_current_user
 from sqlalchemy.orm import Session
 from db.config import init_db
-from db.data_models import Chat, Message
+from db.data_models import Chat, Message, DocumentChunk
 from models.pymodel import chat, message, RenameChatRequest
+from retriver.embedding import embeddings
 from datetime import datetime
 import os
 import shutil
@@ -28,12 +29,21 @@ async def pdfchat(req: ChatRequest,user:Annotated[userdataforapi,Depends(get_cur
         )
         db.add(usermessage)
         db.commit()
-        curchat_fileloc =cur_chat.chat_fileloc
+
+        # Store user question as a DocumentChunk for future context retrieval
+        user_vector = embeddings.embed_query(req.question)
+        db.add(DocumentChunk(
+            chat_id=req.chat_id,
+            content=f"User question: {req.question}",
+            doc_metadata={"source": "user"},
+            embedding=user_vector,
+        ))
+        db.commit()
         
         # Get structured response + source citations from LLM
         llm_response: LLMResponseFormat
         sources: list
-        llm_response, sources = await get_response(req, curchat_fileloc)
+        llm_response, sources = await get_response(req, req.chat_id, db)
         if not llm_response:
             raise Exception("Failed to generate response")
         
@@ -47,6 +57,21 @@ async def pdfchat(req: ChatRequest,user:Annotated[userdataforapi,Depends(get_cur
             follow_up_suggestions=llm_response.follow_up_suggestions or [],
         )
         db.add(assistant_msg)
+        db.commit()
+
+        # Store Q&A pair as a DocumentChunk so future questions can retrieve past answers
+        qa_text = (
+            f"Q: {req.question}\n"
+            f"A: {llm_response.answer}\n"
+            f"Key Points: {', '.join(llm_response.key_points or [])}"
+        )
+        qa_vector = embeddings.embed_query(qa_text)
+        db.add(DocumentChunk(
+            chat_id=req.chat_id,
+            content=qa_text,
+            doc_metadata={"source": "AI", "question": req.question},
+            embedding=qa_vector,
+        ))
         db.commit()
         
         # Return comprehensive response with all structured data
@@ -125,6 +150,9 @@ def deletechat(chatid:int,user:Annotated[userdataforapi,Depends(get_current_user
         chat_to_delete = db.query(Chat).filter(Chat.chat_id==chatid, Chat.user_id==user.user_id).first()
         if not chat_to_delete:
             raise HTTPException(status_code=404, detail="Chat not found or access denied")
+        
+        # Delete all document chunks linked to this chat
+        db.query(DocumentChunk).filter(DocumentChunk.chat_id==chatid).delete(synchronize_session=False)
         
         # Delete all messages in the chat
         db.query(Message).filter(Message.chat_id==chatid).delete(synchronize_session=False)
