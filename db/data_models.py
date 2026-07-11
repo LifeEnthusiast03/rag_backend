@@ -1,6 +1,7 @@
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy import Integer, String, Column, ForeignKey, JSON
+from sqlalchemy import Integer, String, Column, ForeignKey, JSON,Text
 from sqlalchemy.orm import relationship
+from pgvector.sqlalchemy import Vector
 
 Base = declarative_base()
 
@@ -49,3 +50,12 @@ class Message(Base):
     follow_up_suggestions = Column(JSON, nullable=True)
 
     chat = relationship("Chat", back_populates="messages")
+
+class DocumentChunk(Base):
+    __tablename__ = "document_chunk"
+    id = Column(Integer, primary_key=True, index=True)
+    chat_id = Column(Integer, ForeignKey("Chat.chat_id"), nullable=False)
+    content = Column(Text, nullable=False)
+    doc_metadata = Column(JSON, nullable=True)   # e.g. {"source": "file.pdf", "page": 3}
+    embedding = Column(Vector(768))  # 768 = all-mpnet-base-v2 dimension
+    chat = relationship("Chat")
