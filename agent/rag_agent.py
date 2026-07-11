@@ -2,13 +2,13 @@
 RAG Agent using OpenAI Agents SDK.
 
 Tools:
-  - search_knowledge_base : searches the document FAISS vector store
-  - search_chat_history   : searches the chat history FAISS vector store
+  - search_knowledge_base : searches the document chunks in pgvector (DocumentChunk table)
+  - search_chat_history   : fetches recent assistant messages from the Message table
   - generate_citation     : formats a proper citation for content from uploaded docs
   - WebSearchTool         : built-in SDK web-search hosted tool
 
 The agent is instantiated once at module level and re-used per request
-with a per-request RunContextWrapper that carries `chatfileloc`.
+with a per-request RunContextWrapper that carries `chat_id` and a DB session.
 """
 
 from __future__ import annotations
@@ -19,9 +19,12 @@ from datetime import datetime
 
 from agents import Agent, RunContextWrapper, WebSearchTool, function_tool
 from dotenv import load_dotenv
+from sqlalchemy.orm import Session
+from sqlalchemy import select
 
+from db.data_models import Message
 from models.pymodel import LLMResponseFormat
-from retriver.fas import chat_vector_store, get_vector_store
+from retriver.retriver import similarityretriver
 
 load_dotenv()
 
@@ -30,14 +33,15 @@ load_dotenv()
 
 @dataclass
 class RAGContext:
-    """Holds per-request state that tools need (which vector store to query)."""
-    chatfileloc: str
+    """Holds per-request state that tools need (which chat to query)."""
+    chat_id: int
+    db: Session
 
 
 # ── Function Tools ────────────────────────────────────────────────────────────
 
 @function_tool
-def search_knowledge_base(ctx: RunContextWrapper[RAGContext], query: str) -> str:
+async def search_knowledge_base(ctx: RunContextWrapper[RAGContext], query: str) -> str:
     """
     Search the uploaded document knowledge base for information relevant to the
     given query. Returns the top matching text chunks with their source metadata.
@@ -46,20 +50,23 @@ def search_knowledge_base(ctx: RunContextWrapper[RAGContext], query: str) -> str
     Args:
         query: The search query to look up in the knowledge base.
     """
-    chatfileloc = ctx.context.chatfileloc
-    store = get_vector_store(chatfileloc)
-    results = store.similarity_search_with_score(query, k=5)
+    chat_id = ctx.context.chat_id
+    db = ctx.context.db
+
+    # Use similarityretriver — NOTE: this does NOT close db since we pass the
+    # shared session; db.close() in retriver.py only runs when called standalone.
+    results = await similarityretriver(question=query, chat_id=chat_id, k=5, db=db)
+
     if not results:
         return "No relevant documents found in the knowledge base."
 
     chunks = []
-    for i, (doc, score) in enumerate(results):
-        source = os.path.basename(doc.metadata.get("source", "unknown"))
-        page = doc.metadata.get("page", 0) + 1
-        relevance = round((1 - score) * 100, 1) if score <= 1 else round(100 / (1 + score), 1)
+    for i, doc in enumerate(results):
+        source = os.path.basename(doc.doc_metadata.get("source", "unknown")) if doc.doc_metadata else "unknown"
+        page = (doc.doc_metadata.get("page", 0) + 1) if doc.doc_metadata else 1
         chunks.append(
-            f"[Chunk {i+1} | Source: {source}, Page: {page}, Relevance: {relevance}%]\n"
-            f"{doc.page_content}"
+            f"[Chunk {i+1} | Source: {source}, Page: {page}]\n"
+            f"{doc.content}"
         )
     return "\n\n".join(chunks)
 
@@ -74,14 +81,25 @@ def search_chat_history(ctx: RunContextWrapper[RAGContext], query: str) -> str:
     Args:
         query: The search query to look up in previous conversations.
     """
-    chatfileloc = ctx.context.chatfileloc
-    store = chat_vector_store(chatfileloc)
-    results = store.similarity_search(query, k=5)
-    if not results:
+    chat_id = ctx.context.chat_id
+    db = ctx.context.db
+
+    # Fetch the last 10 messages (user + assistant) for context
+    messages = db.scalars(
+        select(Message)
+        .where(Message.chat_id == chat_id)
+        .order_by(Message.message_id.desc())
+        .limit(10)
+    ).all()
+
+    if not messages:
         return "No relevant information found in past conversations."
+
+    # Reverse to chronological order
+    messages = list(reversed(messages))
     chunks = [
-        f"[Past QA {i+1}]:\n{doc.page_content}"
-        for i, doc in enumerate(results)
+        f"[{msg.role.capitalize()}]: {msg.content}"
+        for msg in messages
     ]
     return "\n\n".join(chunks)
 
