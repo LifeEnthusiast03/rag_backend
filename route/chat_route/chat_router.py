@@ -14,6 +14,12 @@ from datetime import datetime
 import os
 import shutil
 import json
+from pathlib import Path
+import sys
+from fastapi.responses import RedirectResponse
+
+sys.path.append(str(Path(__file__).resolve().parent.parent.parent / "supabase"))
+from supabase_client import supabase
 router = APIRouter()
 
 @router.post("/chat", response_model=ChatResponse)
@@ -157,18 +163,20 @@ def deletechat(chatid:int,user:Annotated[userdataforapi,Depends(get_current_user
         # Delete all messages in the chat
         db.query(Message).filter(Message.chat_id==chatid).delete(synchronize_session=False)
         
-        # Delete the specific chat folder (e.g., uploads\20260212_202651)
-        # Safety check: ensure we're not deleting the entire uploads folder
-        if os.path.exists(chat_to_delete.chat_fileloc):
-            folder_path = chat_to_delete.chat_fileloc
-            folder_name = os.path.basename(folder_path)
-            parent_folder = os.path.basename(os.path.dirname(folder_path))
-            
-            # Only delete if it's a subfolder inside uploads, not the uploads folder itself
-            if parent_folder == "uploads" and folder_name and folder_name != "uploads":
-                shutil.rmtree(folder_path)
-            else:
-                print(f"Warning: Skipping deletion of unexpected path: {folder_path}")
+        # Delete files from Supabase
+        try:
+            files = supabase.storage.from_("chat-documents").list(path=str(chatid))
+            if files:
+                file_paths = []
+                for f in files:
+                    name = f.get('name', '')
+                    if name and not name.startswith('.'):
+                        file_paths.append(f"{chatid}/{name}")
+                
+                if file_paths:
+                    supabase.storage.from_("chat-documents").remove(file_paths)
+        except Exception as e:
+            print(f"Warning: Failed to delete files from Supabase: {e}")
         
         # Delete the chat record
         db.delete(chat_to_delete)
@@ -237,19 +245,28 @@ def get_chat_pdfs(
         if not cur_chat:
             raise HTTPException(status_code=404, detail="Chat not found or access denied")
 
-        folder = cur_chat.chat_fileloc
-        if not os.path.isdir(folder):
+        try:
+            files = supabase.storage.from_("chat-documents").list(path=str(chatid))
+        except Exception as e:
+            print(f"Supabase list error: {e}")
+            return {"Successful": True, "files": []}
+            
+        if not files:
             return {"Successful": True, "files": []}
 
-        pdf_files = [
-            {
-                "filename": f,
-                "size_bytes": os.path.getsize(os.path.join(folder, f)),
-                "download_url": f"/pdf/download?chatid={chatid}&filename={f}",
-            }
-            for f in os.listdir(folder)
-            if f.lower().endswith(".pdf")
-        ]
+        pdf_files = []
+        for f in files:
+            name = f.get('name', '')
+            if name.startswith('.'):
+                continue
+            if name.lower().endswith(".pdf"):
+                size = f.get('metadata', {}).get('size', 0)
+                pdf_files.append({
+                    "filename": name,
+                    "size_bytes": size,
+                    "download_url": f"/pdf/download?chatid={chatid}&filename={name}",
+                })
+                
         pdf_files.sort(key=lambda x: x["filename"])
         return {"Successful": True, "files": pdf_files}
     except HTTPException:
@@ -258,7 +275,6 @@ def get_chat_pdfs(
         print(f"Failed to fetch PDFs: {e}")
         return {"Successful": False, "files": [], "error": str(e)}
 
-
 @router.get("/pdf/download")
 def download_pdf(
     chatid: int,
@@ -266,7 +282,7 @@ def download_pdf(
     user: Annotated[userdataforapi, Depends(get_current_user)],
     db: Annotated[Session, Depends(init_db)],
 ):
-    """Stream a single PDF file back to the client."""
+    """Generate a signed URL and redirect the client to download the PDF."""
     try:
         cur_chat = db.query(Chat).filter(
             Chat.chat_id == chatid,
@@ -277,16 +293,21 @@ def download_pdf(
 
         # Safety: strip any path traversal attempts, allow only the bare filename
         safe_name = os.path.basename(filename)
-        file_path = os.path.join(cur_chat.chat_fileloc, safe_name)
+        if not safe_name.lower().endswith(".pdf"):
+            raise HTTPException(status_code=400, detail="Invalid file type")
 
-        if not os.path.isfile(file_path) or not safe_name.lower().endswith(".pdf"):
-            raise HTTPException(status_code=404, detail="File not found")
+        file_path = f"{chatid}/{safe_name}"
 
-        return FileResponse(
-            path=file_path,
-            media_type="application/pdf",
-            filename=safe_name,
+        url_response = supabase.storage.from_("chat-documents").create_signed_url(
+            path=file_path, 
+            expires_in=3600
         )
+        
+        signed_url = url_response.get('signedURL')
+        if not signed_url:
+            raise HTTPException(status_code=404, detail="File not found or URL generation failed")
+
+        return RedirectResponse(url=signed_url)
     except HTTPException:
         raise
     except Exception as e:
