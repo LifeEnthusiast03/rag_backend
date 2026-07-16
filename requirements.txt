@@ -1,19 +1,34 @@
 fastapi
-pydantic
+pydantic[email]
 python-dotenv
 python-multipart
 uvicorn
-langchain-core
-langchain-community
-langchain-text-splitters
-openai-agents
-faiss-cpu
-pypdf
+
+# Database
 sqlalchemy
 psycopg2-binary
+pgvector
+
+# LangChain
+langchain-community
+langchain-text-splitters
+langchain-huggingface
+
+# Embeddings
+sentence-transformers
+
+# OpenAI Agents SDK
+openai-agents
+
+# PDF loading (required by PyPDFDirectoryLoader)
+pypdf
+
+# Auth
 pyJWT
 bcrypt
-email-validator
-langchain-huggingface 
-sentence-transformers
+
+# Supabase storage
+supabase
+
+# HTTP client (GitHub OAuth)
 httpx
